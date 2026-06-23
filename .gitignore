@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local model outputs can be large and are reproducible.
+models/
+*.zip
+
+# OS/editor noise.
+.DS_Store
+.idea/
+.vscode/

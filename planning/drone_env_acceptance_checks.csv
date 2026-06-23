@@ -1,0 +1,17 @@
+Check ID,Category,Command/Test,Expected Result,Required Before Done,Status
+A001,Import,"python -c ""from drone_env.envs.drone_intercept_3d import DroneIntercept3DEnv""",No import error,Yes,Completed
+A002,Gym Registration,"python -c ""import gymnasium as gym, drone_env; env=gym.make('DroneIntercept3D-v0'); print(env)""",Env is created,Yes,Completed
+A003,API,pytest -q tests/test_drone_intercept_3d.py::test_reset_returns_valid_obs,"Reset returns finite obs shape (20,)",Yes,Completed
+A004,API,pytest -q tests/test_drone_intercept_3d.py::test_step_returns_valid_outputs,Step returns Gymnasium 5-tuple,Yes,Completed
+A005,Termination,pytest -q tests/test_drone_intercept_3d.py::test_capture_terminates,Capture terminates and rewards success,Yes,Completed
+A006,Termination,pytest -q tests/test_drone_intercept_3d.py::test_crash_terminates,Crash terminates and penalizes,Yes,Completed
+A007,Termination,pytest -q tests/test_drone_intercept_3d.py::test_out_of_bounds_terminates,OOB terminates and penalizes,Yes,Completed
+A008,Termination,pytest -q tests/test_drone_intercept_3d.py::test_timeout_truncates,Max steps sets truncated=True,Yes,Completed
+A009,Reward,pytest -q tests/test_drone_intercept_3d.py::test_reward_breakdown_has_all_components,All 10 reward keys present,Yes,Completed
+A010,Reward,pytest -q tests/test_drone_intercept_3d.py::test_distance_progress_reward_positive_when_closer,Progress reward sign is correct,Yes,Completed
+A011,Rendering,pytest -q tests/test_drone_intercept_3d.py::test_render_rgb_array,rgb_array returns H x W x 3 array or clean skip,Yes,Completed
+A012,Env Check,python scripts/check_env.py,Env checker passes,Yes,Completed
+A013,Random Rollout,python scripts/random_rollout.py --episodes 3,Completes with stats and no NaNs,Yes,Completed
+A014,Manual Policy,python scripts/manual_policy_demo.py --target-mode straight --episodes 3,Distance generally improves or captures,Yes,Completed
+A015,Human Render,python scripts/manual_policy_demo.py --target-mode orbit --render-mode human --episodes 1,Window renders drones/trails/HUD and closes,No if headless,Completed
+A016,Full Tests,pytest -q,All tests pass,Yes,Completed
