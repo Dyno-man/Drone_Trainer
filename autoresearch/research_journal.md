@@ -381,3 +381,15 @@ By default this creates `codex/autoresearch-<run_id>` from `Auto-Research`.
 **Critical finding**: intercept_gain boundary is narrow (1.52 OK, 1.53 target loss). Evasive_high_viewport is the bottleneck for flythrough_success_rate - the heuristic cannot achieve flythrough on this scenario within 260 steps.
 
 **What to try next**: Improve evasive scenario handling via curriculum progression (start simpler scenarios, increase difficulty), or switch from hand-coded heuristic to learned policy that can discover non-linear intercept strategies.
+
+## Next Hypothesis
+
+- Hypothesis: Add state-aware lead pursuit for evasive targets. When the target is visible or locked and lateral relative velocity is high, steer toward a bounded lead point along the target velocity instead of steering directly at relative position.
+- Goal: Improve the evasive bottleneck without increasing crash_rate, out_of_bounds_rate, lost_target_rate, or side_pass_false_success_rate.
+- Edit target: `autoresearch/editable/recipe.py` first; only touch `autoresearch/editable/policy_config.py` if a new bounded lead gain is needed.
+- Keep: `intercept_gain=1.52` unless the lead term makes it unstable.
+- Avoid: global aggression increases; prior rounds showed they quickly cause target loss or crashes.
+- Quick acceptance signal: `flythrough_success_rate` exceeds `0.75`, or `mean_steps_to_intercept` improves while all hard gates remain clean.
+- Medium acceptance signal: medium `flythrough_success_rate` improves above `0.5714285714` without significant crash-rate worsening.
+- First command: `python autoresearch/run_experiment.py --mode quick`
+- Promotion command: `python autoresearch/run_experiment.py --mode medium`
