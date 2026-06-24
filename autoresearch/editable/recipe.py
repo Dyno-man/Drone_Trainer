@@ -41,9 +41,8 @@ def select_action(obs: np.ndarray, info: dict[str, Any], step: int) -> np.ndarra
 
 def hypothesis() -> str:
     return (
-        "Use a viewport-only heuristic that sweeps when the target is hidden, "
-        "then accelerates through the remembered target bearing with stronger "
-        "fly-through reward shaping."
+        "Slightly increased intercept and search gains for faster, more aggressive "
+        "target pursuit while maintaining stability across all quick-mode scenarios."
     )
 
 
