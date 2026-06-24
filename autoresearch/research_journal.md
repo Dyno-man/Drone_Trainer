@@ -12,6 +12,14 @@ Codex research trials may modify only:
 
 Locked evaluator files are guarded by `autoresearch/locked_manifest.json`.
 
+To start a trial from the stable autoresearch baseline branch:
+
+```bash
+python autoresearch/run_experiment.py --mode quick --create-branch
+```
+
+By default this creates `codex/autoresearch-<run_id>` from `Auto-Research`.
+
 
 ## 20260624T141756Z
 
@@ -40,6 +48,17 @@ Locked evaluator files are guarded by `autoresearch/locked_manifest.json`.
 - Hypothesis: Use a viewport-only heuristic that sweeps when the target is hidden, then accelerates through the remembered target bearing with stronger fly-through reward shaping.
 - Mode: `quick`
 - Files changed: autoresearch/editable/
+- Result: accepted
+- Score: `89.900000`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Stress test with evasive and orbit scenarios before promoting the recipe.
+
+## 20260624T145140Z
+
+- Hypothesis: Use a viewport-only heuristic that sweeps when the target is hidden, then accelerates through the remembered target bearing with stronger fly-through reward shaping.
+- Mode: `quick`
+- Files changed: none
 - Result: accepted
 - Score: `89.900000`
 - Accepted or rejected: accepted

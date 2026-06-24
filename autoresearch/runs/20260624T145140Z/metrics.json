@@ -1,0 +1,245 @@
+{
+  "episodes": [
+    {
+      "crashed": false,
+      "final_distance": 1.9799938201904297,
+      "final_info": {
+        "captured": true,
+        "crashed": false,
+        "distance": 1.9799938201904297,
+        "flythrough_intercept": true,
+        "has_target_lock": true,
+        "out_of_bounds": false,
+        "steps_since_seen": 0,
+        "target_mode": "straight",
+        "target_visible": true
+      },
+      "first_acquired": true,
+      "flythrough_success": true,
+      "lost_target": false,
+      "out_of_bounds": false,
+      "repeat_index": 0,
+      "reward": 744.4929032652848,
+      "scenario": "visible_straight_centerline",
+      "scenario_definition": {
+        "max_steps": null,
+        "name": "visible_straight_centerline",
+        "pursuer_heading": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "pursuer_pos": [
+          -35.0,
+          0.0,
+          18.0
+        ],
+        "pursuer_vel": [
+          7.0,
+          0.0,
+          0.0
+        ],
+        "seed": 100,
+        "target_mode": "straight",
+        "target_pos": [
+          15.0,
+          0.0,
+          18.0
+        ],
+        "target_vel": [
+          4.0,
+          0.0,
+          0.0
+        ]
+      },
+      "steps": 37,
+      "steps_to_acquire": 0,
+      "steps_to_intercept": 37,
+      "target_mode": "straight"
+    },
+    {
+      "crashed": false,
+      "final_distance": 1.4826099872589111,
+      "final_info": {
+        "captured": true,
+        "crashed": false,
+        "distance": 1.4826099872589111,
+        "flythrough_intercept": true,
+        "has_target_lock": true,
+        "out_of_bounds": false,
+        "steps_since_seen": 1,
+        "target_mode": "straight",
+        "target_visible": false
+      },
+      "first_acquired": true,
+      "flythrough_success": true,
+      "lost_target": false,
+      "out_of_bounds": false,
+      "repeat_index": 0,
+      "reward": 772.2627427035213,
+      "scenario": "hidden_then_acquire_left",
+      "scenario_definition": {
+        "max_steps": null,
+        "name": "hidden_then_acquire_left",
+        "pursuer_heading": [
+          1.0,
+          0.05,
+          0.0
+        ],
+        "pursuer_pos": [
+          -45.0,
+          -8.0,
+          20.0
+        ],
+        "pursuer_vel": [
+          5.0,
+          1.0,
+          0.0
+        ],
+        "seed": 101,
+        "target_mode": "straight",
+        "target_pos": [
+          5.0,
+          18.0,
+          20.0
+        ],
+        "target_vel": [
+          3.0,
+          -0.5,
+          0.0
+        ]
+      },
+      "steps": 39,
+      "steps_to_acquire": 0,
+      "steps_to_intercept": 39,
+      "target_mode": "straight"
+    },
+    {
+      "crashed": false,
+      "final_distance": 7.131558895111084,
+      "final_info": {
+        "captured": false,
+        "crashed": false,
+        "distance": 7.131558895111084,
+        "flythrough_intercept": false,
+        "has_target_lock": true,
+        "out_of_bounds": false,
+        "steps_since_seen": 1,
+        "target_mode": "evasive",
+        "target_visible": false
+      },
+      "first_acquired": true,
+      "flythrough_success": false,
+      "lost_target": false,
+      "out_of_bounds": false,
+      "repeat_index": 0,
+      "reward": 709.6532232093674,
+      "scenario": "evasive_high_viewport",
+      "scenario_definition": {
+        "max_steps": null,
+        "name": "evasive_high_viewport",
+        "pursuer_heading": [
+          1.0,
+          -0.2,
+          0.05
+        ],
+        "pursuer_pos": [
+          -25.0,
+          18.0,
+          13.0
+        ],
+        "pursuer_vel": [
+          6.0,
+          -2.0,
+          0.8
+        ],
+        "seed": 102,
+        "target_mode": "evasive",
+        "target_pos": [
+          18.0,
+          2.0,
+          22.0
+        ],
+        "target_vel": [
+          0.0,
+          5.0,
+          -0.2
+        ]
+      },
+      "steps": 260,
+      "steps_to_acquire": 0,
+      "steps_to_intercept": null,
+      "target_mode": "evasive"
+    },
+    {
+      "crashed": false,
+      "final_distance": 1.5655505657196045,
+      "final_info": {
+        "captured": true,
+        "crashed": false,
+        "distance": 1.5655505657196045,
+        "flythrough_intercept": true,
+        "has_target_lock": true,
+        "out_of_bounds": false,
+        "steps_since_seen": 0,
+        "target_mode": "orbit",
+        "target_visible": true
+      },
+      "first_acquired": true,
+      "flythrough_success": true,
+      "lost_target": false,
+      "out_of_bounds": false,
+      "repeat_index": 0,
+      "reward": 884.8908744463372,
+      "scenario": "orbit_crossing",
+      "scenario_definition": {
+        "max_steps": null,
+        "name": "orbit_crossing",
+        "pursuer_heading": [
+          1.0,
+          -0.1,
+          0.0
+        ],
+        "pursuer_pos": [
+          -38.0,
+          12.0,
+          24.0
+        ],
+        "pursuer_vel": [
+          7.0,
+          -1.0,
+          0.0
+        ],
+        "seed": 103,
+        "target_mode": "orbit",
+        "target_pos": [
+          8.0,
+          4.0,
+          24.0
+        ],
+        "target_vel": [
+          1.0,
+          5.5,
+          0.0
+        ]
+      },
+      "steps": 110,
+      "steps_to_acquire": 0,
+      "steps_to_intercept": 110,
+      "target_mode": "orbit"
+    }
+  ],
+  "metrics": {
+    "crash_rate": 0.0,
+    "episodes": 4.0,
+    "first_acquisition_rate": 1.0,
+    "flythrough_success_rate": 0.75,
+    "lost_target_rate": 0.0,
+    "mean_steps_to_acquire": 0.0,
+    "mean_steps_to_intercept": 62.0,
+    "out_of_bounds_rate": 0.0,
+    "side_pass_false_success_rate": 0.0
+  },
+  "mode": "quick",
+  "model_path": null
+}
