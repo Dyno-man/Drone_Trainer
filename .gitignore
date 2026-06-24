@@ -8,6 +8,10 @@ __pycache__/
 models/
 *.zip
 
+# Autoresearch run outputs are generated artifacts.
+autoresearch/runs/
+autoresearch/*.lock
+
 # OS/editor noise.
 .DS_Store
 .idea/

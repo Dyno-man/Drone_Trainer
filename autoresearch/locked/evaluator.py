@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 from dataclasses import asdict
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -21,19 +22,12 @@ from autoresearch.locked.benchmark_scenarios import (
     scenarios_for_mode,
 )
 from drone_env.envs.drone_intercept_3d import DroneIntercept3DConfig, DroneIntercept3DEnv
+from drone_env.utils.geometry import safe_unit
 
 
 class PredictModel(Protocol):
     def predict(self, obs: np.ndarray, deterministic: bool = True) -> tuple[np.ndarray, Any]:
         ...
-
-
-def _unit(values: tuple[float, float, float]) -> np.ndarray:
-    vector = np.asarray(values, dtype=np.float32)
-    length = float(np.linalg.norm(vector))
-    if length < 1e-8:
-        return np.array([1.0, 0.0, 0.0], dtype=np.float32)
-    return (vector / length).astype(np.float32)
 
 
 def _build_config(mode: str, scenario: BenchmarkScenario) -> DroneIntercept3DConfig:
@@ -44,21 +38,35 @@ def _build_config(mode: str, scenario: BenchmarkScenario) -> DroneIntercept3DCon
     return DroneIntercept3DConfig(**kwargs)
 
 
-def _apply_scenario(env: DroneIntercept3DEnv, scenario: BenchmarkScenario) -> None:
-    env.pursuer_pos = np.asarray(scenario.pursuer_pos, dtype=np.float32)
-    env.previous_pursuer_pos = env.pursuer_pos.copy()
-    env.pursuer_vel = np.asarray(scenario.pursuer_vel, dtype=np.float32)
-    env.pursuer_heading = _unit(scenario.pursuer_heading)
-    env.target_pos = np.asarray(scenario.target_pos, dtype=np.float32)
-    env.target_vel = np.asarray(scenario.target_vel, dtype=np.float32)
-    env.previous_distance = float(np.linalg.norm(env.target_pos - env.pursuer_pos))
-    env.previous_action = np.zeros(3, dtype=np.float32)
-    env.steps_since_seen = env.config.lock_memory_steps + 1
-    env.has_target_lock = False
-    env.target_visible = False
-    env._has_ever_seen_target = False
-    env._update_visibility_state()
-    env.last_info = env._base_info(False, False, False)
+class BenchmarkSetup:
+    """Applies benchmark scenario state to the current env implementation."""
+
+    def __init__(self, scenario: BenchmarkScenario) -> None:
+        self.scenario = scenario
+
+    def apply(self, env: DroneIntercept3DEnv) -> None:
+        scenario = self.scenario
+        env.pursuer_pos = np.asarray(scenario.pursuer_pos, dtype=np.float32)
+        env.previous_pursuer_pos = env.pursuer_pos.copy()
+        env.pursuer_vel = np.asarray(scenario.pursuer_vel, dtype=np.float32)
+        env.pursuer_heading = self._heading(scenario.pursuer_heading)
+        env.target_pos = np.asarray(scenario.target_pos, dtype=np.float32)
+        env.target_vel = np.asarray(scenario.target_vel, dtype=np.float32)
+        env.previous_distance = float(np.linalg.norm(env.target_pos - env.pursuer_pos))
+        env.previous_action = np.zeros(3, dtype=np.float32)
+        env.steps_since_seen = env.config.lock_memory_steps + 1
+        env.has_target_lock = False
+        env.target_visible = False
+        env._has_ever_seen_target = False
+        env._update_visibility_state()
+        env.last_info = env._base_info(False, False, False)
+
+    @staticmethod
+    def _heading(values: tuple[float, float, float]) -> np.ndarray:
+        heading = safe_unit(np.asarray(values, dtype=np.float32))
+        if float(np.linalg.norm(heading)) == 0.0:
+            return np.array([1.0, 0.0, 0.0], dtype=np.float32)
+        return heading
 
 
 def _episode_action(model: PredictModel | None, obs: np.ndarray, info: dict[str, Any], step: int) -> np.ndarray:
@@ -93,7 +101,7 @@ def run_episode(
     env = DroneIntercept3DEnv(config=_build_config(mode, scenario), target_mode=scenario.target_mode)
     try:
         obs, info = env.reset(seed=scenario.seed + repeat_index)
-        _apply_scenario(env, scenario)
+        BenchmarkSetup(scenario).apply(env)
         obs = env._get_obs()
         info = env.last_info.copy()
         acquired = bool(info["target_visible"])
@@ -155,23 +163,38 @@ def _mean(values: list[float]) -> float:
     return float(sum(values) / len(values)) if values else 0.0
 
 
-def side_pass_false_success_rate(mode: str) -> float:
-    false_successes = 0
+@lru_cache(maxsize=None)
+def run_side_pass_probes(mode: str) -> tuple[dict[str, Any], ...]:
+    probes = []
     for probe in SIDE_PASS_PROBES:
         env = DroneIntercept3DEnv(config=_build_config(mode, probe), target_mode=probe.target_mode)
         try:
             env.reset(seed=probe.seed)
-            _apply_scenario(env, probe)
+            BenchmarkSetup(probe).apply(env)
             _, _, _, _, info = env.step(np.zeros(3, dtype=np.float32))
-            if info["captured"] or info["flythrough_intercept"]:
-                false_successes += 1
+            probes.append(
+                {
+                    "scenario": probe.name,
+                    "false_success": bool(info["captured"] or info["flythrough_intercept"]),
+                    "captured": bool(info["captured"]),
+                    "flythrough_intercept": bool(info["flythrough_intercept"]),
+                    "distance": float(info["distance"]),
+                }
+            )
         finally:
             env.close()
-    return false_successes / max(1, len(SIDE_PASS_PROBES))
+    return tuple(probes)
 
 
-def summarize_episodes(episodes: list[dict[str, Any]], mode: str) -> dict[str, float]:
-    total = max(1, len(episodes))
+def side_pass_false_success_rate(side_pass_probes: tuple[dict[str, Any], ...]) -> float:
+    false_successes = [float(probe["false_success"]) for probe in side_pass_probes]
+    return _mean(false_successes)
+
+
+def summarize_episodes(
+    episodes: list[dict[str, Any]],
+    side_pass_probes: tuple[dict[str, Any], ...],
+) -> dict[str, float]:
     acquire_steps = [float(ep["steps_to_acquire"]) for ep in episodes if ep["steps_to_acquire"] is not None]
     intercept_steps = [
         float(ep["steps_to_intercept"]) for ep in episodes if ep["steps_to_intercept"] is not None
@@ -185,7 +208,7 @@ def summarize_episodes(episodes: list[dict[str, Any]], mode: str) -> dict[str, f
         "crash_rate": _mean([float(ep["crashed"]) for ep in episodes]),
         "out_of_bounds_rate": _mean([float(ep["out_of_bounds"]) for ep in episodes]),
         "lost_target_rate": _mean([float(ep["lost_target"]) for ep in episodes]),
-        "side_pass_false_success_rate": side_pass_false_success_rate(mode),
+        "side_pass_false_success_rate": side_pass_false_success_rate(side_pass_probes),
     }
 
 
@@ -202,8 +225,17 @@ def evaluate(mode: str = "quick", model_path: str | None = None) -> dict[str, An
     for scenario in scenarios_for_mode(mode):
         for repeat_index in range(scenario_repeats(mode)):
             episodes.append(run_episode(scenario, mode=mode, repeat_index=repeat_index, model=model))
-    metrics = summarize_episodes(episodes, mode)
-    return {"mode": mode, "model_path": model_path, "metrics": metrics, "episodes": episodes}
+    side_pass_probes = run_side_pass_probes(mode)
+    metrics = summarize_episodes(episodes, side_pass_probes)
+    result: dict[str, Any] = {
+        "mode": mode,
+        "metrics": metrics,
+        "episodes": episodes,
+        "side_pass_probes": list(side_pass_probes),
+    }
+    if model_path is not None:
+        result["model_path"] = model_path
+    return result
 
 
 def main() -> None:

@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import argparse
 import csv
+import fcntl
 import json
 import subprocess
 import sys
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterator
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -14,12 +18,13 @@ sys.path.insert(0, str(ROOT))
 from autoresearch.editable.recipe import hypothesis, what_to_try_next
 from autoresearch.locked.anti_cheat_checks import locked_files_modified
 from autoresearch.locked.evaluator import evaluate
-from autoresearch.locked.scoring import ScoreResult, score_metrics
+from autoresearch.locked.scoring import BaselineMetrics, ScoreResult, score_metrics
 
 
 RUNS_DIR = ROOT / "autoresearch" / "runs"
 LEADERBOARD_PATH = ROOT / "autoresearch" / "leaderboard.csv"
 JOURNAL_PATH = ROOT / "autoresearch" / "research_journal.md"
+RESULTS_LOCK_PATH = ROOT / "autoresearch" / "results.lock"
 DEFAULT_BASE_BRANCH = "Auto-Research"
 
 
@@ -33,6 +38,17 @@ def _run_command(args: list[str]) -> tuple[bool, str]:
         check=False,
     )
     return completed.returncode == 0, completed.stdout
+
+
+@contextmanager
+def _exclusive_results_lock() -> Iterator[None]:
+    RESULTS_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with RESULTS_LOCK_PATH.open("w", encoding="utf-8") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def _git(args: list[str]) -> subprocess.CompletedProcess[str]:
@@ -81,20 +97,6 @@ def _create_trial_branch(
     return trial_branch
 
 
-def _latest_accepted_metrics() -> dict[str, float] | None:
-    if not LEADERBOARD_PATH.exists():
-        return None
-    with LEADERBOARD_PATH.open(newline="", encoding="utf-8") as handle:
-        rows = [row for row in csv.DictReader(handle) if row.get("accepted") == "true"]
-    if not rows:
-        return None
-    best = max(rows, key=lambda row: float(row.get("score", "0") or 0.0))
-    return {
-        "crash_rate": float(best.get("crash_rate", "0") or 0.0),
-        "flythrough_success_rate": float(best.get("flythrough_success_rate", "0") or 0.0),
-    }
-
-
 def _git_diff() -> str:
     completed = subprocess.run(
         ["git", "diff", "--", "autoresearch/editable"],
@@ -109,7 +111,7 @@ def _git_diff() -> str:
 
 def _changed_editable_files() -> str:
     completed = subprocess.run(
-        ["git", "status", "--short", "--", "autoresearch/editable"],
+        ["git", "status", "--porcelain=v1", "--", "autoresearch/editable"],
         cwd=ROOT,
         text=True,
         stdout=subprocess.PIPE,
@@ -118,6 +120,18 @@ def _changed_editable_files() -> str:
     )
     changed = [line[3:] for line in completed.stdout.splitlines() if line.strip()]
     return ", ".join(changed) if changed else "none"
+
+
+def _run_validation_and_evaluation(mode: str) -> tuple[tuple[bool, str], tuple[bool, str], dict]:
+    try:
+        executor_context = ProcessPoolExecutor(max_workers=3)
+    except (OSError, PermissionError):
+        executor_context = ThreadPoolExecutor(max_workers=3)
+    with executor_context as executor:
+        check_env_future = executor.submit(_run_command, [sys.executable, "scripts/check_env.py"])
+        tests_future = executor.submit(_run_command, [sys.executable, "-m", "pytest", "-q"])
+        eval_future = executor.submit(evaluate, mode)
+        return check_env_future.result(), tests_future.result(), eval_future.result()
 
 
 def _write_proposal(run_dir: Path, mode: str, branch: str | None, base_branch: str | None) -> None:
@@ -170,7 +184,7 @@ def _append_leaderboard(run_id: str, mode: str, metrics: dict[str, float], score
         "side_pass_false_success_rate",
         "rejection_reasons",
     ]
-    exists = LEADERBOARD_PATH.exists()
+    exists = LEADERBOARD_PATH.exists() and LEADERBOARD_PATH.stat().st_size > 0
     with LEADERBOARD_PATH.open("a", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         if not exists:
@@ -204,24 +218,25 @@ def _append_journal(
             f"- Base branch: `{base_branch}`",
             f"- Research branch: `{branch}`",
         ]
-    JOURNAL_PATH.open("a", encoding="utf-8").write(
-        "\n".join(
-            [
-                f"\n## {run_id}",
-                "",
-                f"- Hypothesis: {hypothesis()}",
-                f"- Mode: `{mode}`",
-                *branch_lines,
-                f"- Files changed: {changed_files}",
-                f"- Result: {result}",
-                f"- Score: `{score.score:.6f}`",
-                f"- Accepted or rejected: {result}",
-                f"- Rejection reasons: {', '.join(score.rejection_reasons) if score.rejection_reasons else 'none'}",
-                f"- What to try next: {what_to_try_next(metrics)}",
-                "",
-            ]
-        ),
-    )
+    with JOURNAL_PATH.open("a", encoding="utf-8", newline="") as handle:
+        handle.write(
+            "\n".join(
+                [
+                    f"\n## {run_id}",
+                    "",
+                    f"- Hypothesis: {hypothesis()}",
+                    f"- Mode: `{mode}`",
+                    *branch_lines,
+                    f"- Files changed: {changed_files}",
+                    f"- Result: {result}",
+                    f"- Score: `{score.score:.6f}`",
+                    f"- Accepted or rejected: {result}",
+                    f"- Rejection reasons: {', '.join(score.rejection_reasons) if score.rejection_reasons else 'none'}",
+                    f"- What to try next: {what_to_try_next(metrics)}",
+                    "",
+                ]
+            )
+        )
 
 
 def run_experiment(
@@ -244,9 +259,9 @@ def run_experiment(
     run_dir.mkdir(parents=True, exist_ok=False)
 
     _write_proposal(run_dir, mode, research_branch, base_branch if research_branch else None)
-    check_env_passed, check_env_output = _run_command([sys.executable, "scripts/check_env.py"])
-    tests_passed, tests_output = _run_command([sys.executable, "-m", "pytest", "-q"])
-    result = evaluate(mode=mode)
+    (check_env_passed, check_env_output), (tests_passed, tests_output), result = (
+        _run_validation_and_evaluation(mode)
+    )
     metrics = result["metrics"]
     run_dir.joinpath("metrics.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     run_dir.joinpath("diff.patch").write_text(_git_diff(), encoding="utf-8")
@@ -255,24 +270,25 @@ def run_experiment(
         encoding="utf-8",
     )
 
-    score = score_metrics(
-        metrics,
-        tests_passed=tests_passed,
-        check_env_passed=check_env_passed,
-        locked_files_modified=locked_files_modified(),
-        baseline_metrics=_latest_accepted_metrics(),
-    )
-    _write_eval_summary(run_dir, result, score)
-    _append_leaderboard(run_id, mode, metrics, score)
-    _append_journal(
-        run_id,
-        mode,
-        metrics,
-        score,
-        _changed_editable_files(),
-        research_branch,
-        base_branch if research_branch else None,
-    )
+    with _exclusive_results_lock():
+        score = score_metrics(
+            metrics,
+            tests_passed=tests_passed,
+            check_env_passed=check_env_passed,
+            locked_files_modified=locked_files_modified(),
+            baseline_metrics=BaselineMetrics.from_leaderboard(LEADERBOARD_PATH),
+        )
+        _write_eval_summary(run_dir, result, score)
+        _append_leaderboard(run_id, mode, metrics, score)
+        _append_journal(
+            run_id,
+            mode,
+            metrics,
+            score,
+            _changed_editable_files(),
+            research_branch,
+            base_branch if research_branch else None,
+        )
 
     print(f"run_id={run_id}")
     print(f"run_dir={run_dir}")

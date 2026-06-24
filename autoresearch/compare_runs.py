@@ -1,11 +1,26 @@
 from __future__ import annotations
 
 import csv
+import fcntl
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 
 ROOT = Path(__file__).resolve().parents[1]
 LEADERBOARD_PATH = ROOT / "autoresearch" / "leaderboard.csv"
+RESULTS_LOCK_PATH = ROOT / "autoresearch" / "results.lock"
+
+
+@contextmanager
+def _shared_results_lock() -> Iterator[None]:
+    RESULTS_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with RESULTS_LOCK_PATH.open("w", encoding="utf-8") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def main() -> None:
@@ -13,8 +28,9 @@ def main() -> None:
         print("No leaderboard exists yet. Run python autoresearch/run_experiment.py --mode quick first.")
         return
 
-    with LEADERBOARD_PATH.open(newline="", encoding="utf-8") as handle:
-        rows = list(csv.DictReader(handle))
+    with _shared_results_lock():
+        with LEADERBOARD_PATH.open(newline="", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
     if not rows:
         print("Leaderboard is empty.")
         return
@@ -37,4 +53,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
