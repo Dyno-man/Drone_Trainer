@@ -19,11 +19,27 @@ def select_action(obs: np.ndarray, info: dict[str, Any], step: int) -> np.ndarra
     target_available = bool(obs[15] > 0.5 or obs[16] > 0.5)
 
     if target_available:
-        desired = (
-            cfg["intercept_gain"] * safe_unit(relative_pos)
-            + cfg["velocity_gain"] * relative_vel
-            - cfg["damping_gain"] * velocity
+        raw_relative_pos = np.array(
+            [relative_pos[0] * 200.0, relative_pos[1] * 200.0, relative_pos[2] * 50.0],
+            dtype=np.float32,
         )
+        raw_relative_vel = relative_vel * 28.0
+        los_unit = safe_unit(raw_relative_pos)
+        rel_vel_along_los = np.dot(raw_relative_vel, los_unit)
+        rel_vel_tangential = np.linalg.norm(raw_relative_vel - rel_vel_along_los * los_unit)
+
+        if rel_vel_tangential > cfg["maneuver_threshold"]:
+            lead_point = raw_relative_pos + cfg["lead_time_gain"] * raw_relative_vel
+            desired = (
+                cfg["intercept_gain"] * safe_unit(lead_point)
+                - cfg["damping_gain"] * velocity
+            )
+        else:
+            desired = (
+                cfg["intercept_gain"] * safe_unit(relative_pos)
+                + cfg["velocity_gain"] * relative_vel
+                - cfg["damping_gain"] * velocity
+            )
     else:
         phase = step * 0.19
         lateral = np.array([-heading[1], heading[0], 0.0], dtype=np.float32)

@@ -9,5 +9,6 @@ POLICY_CONFIG = {
     "search_forward_gain": 0.56,
     "damping_gain": 0.15,
     "max_action": 1.0,
+    "lead_time_gain": 0.8,
+    "maneuver_threshold": 2.0,
 }
-

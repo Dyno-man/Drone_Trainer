@@ -393,3 +393,44 @@ By default this creates `codex/autoresearch-<run_id>` from `Auto-Research`.
 - Medium acceptance signal: medium `flythrough_success_rate` improves above `0.5714285714` without significant crash-rate worsening.
 - First command: `python autoresearch/run_experiment.py --mode quick`
 - Promotion command: `python autoresearch/run_experiment.py --mode medium`
+
+## 20260624T183035Z
+
+- Hypothesis: Slightly increased intercept and search gains for faster, more aggressive target pursuit while maintaining stability across all quick-mode scenarios.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: accepted
+- Score: `89.950000`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Stress test with evasive and orbit scenarios before promoting the recipe.
+
+## 20260624T183406Z
+
+- Hypothesis: Slightly increased intercept and search gains for faster, more aggressive target pursuit while maintaining stability across all quick-mode scenarios.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: accepted
+- Score: `115.750000`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Stress test with evasive and orbit scenarios before promoting the recipe.
+
+## 20260624T183419Z
+
+- Hypothesis: Slightly increased intercept and search gains for faster, more aggressive target pursuit while maintaining stability across all quick-mode scenarios.
+- Mode: `medium`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: accepted
+- Score: `95.451984`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Stress test with evasive and orbit scenarios before promoting the recipe.
+
+## 20260624T183430Z Session note
+
+- Primary adaptive pursuit attempt `20260624T183035Z` was a no-op despite mechanical acceptance: it compared normalized relative velocity against `maneuver_threshold=2.0`, so the maneuver branch did not activate and quick stayed at score `89.95`, flythrough `0.75`.
+- Corrected implementation converts viewport-normalized relative position/velocity back to raw units for maneuver detection and lead-point pursuit while leaving the non-maneuver and search branches unchanged.
+- Corrected quick run `20260624T183406Z`: score `115.75`, flythrough `1.0`, `evasive_high_viewport` succeeds at step `58`, all quick guardrails remain `0.0`.
+- Promotion run `20260624T183419Z`: medium score `95.451984`, flythrough `0.8571428571428571`, crash/lost-target/side-pass rates `0.0`; remaining medium failure is `far_hidden_search` with out-of-bounds rate `0.14285714285714285`.
+- Next useful experiment: address far hidden search acquisition/out-of-bounds separately; do not retune evasive pursuit unless a regression appears.
