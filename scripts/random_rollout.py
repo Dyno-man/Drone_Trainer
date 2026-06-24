@@ -37,7 +37,8 @@ def main() -> None:
                 length += 1
             print(
                 f"episode={episode} reward={total_reward:.3f} length={length} "
-                f"captured={info['captured']} final_distance={info['distance']:.3f}"
+                f"captured={info['captured']} flythrough_intercept={info['flythrough_intercept']} "
+                f"final_distance={info['distance']:.3f}"
             )
     finally:
         env.close()

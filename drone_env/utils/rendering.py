@@ -59,8 +59,11 @@ class DroneRenderer:
         self.draw_polyline(state.get("pursuer_trail", []), (64, 180, 255))
         self.draw_polyline(state.get("target_trail", []), (255, 163, 77))
         pg.draw.line(self.screen, (190, 198, 208), self.project(pursuer), self.project(target), 1)
+        self._draw_viewport(state)
         self._draw_drone(pursuer, (54, 162, 235), 7)
         self._draw_drone(target, (245, 126, 43), 7)
+        if state.get("flythrough_intercept", False):
+            pg.draw.circle(self.screen, (124, 255, 178), self.project(target), 18, 3)
         self._draw_hud(state)
 
         if self.render_mode == "human":
@@ -113,12 +116,42 @@ class DroneRenderer:
         pg.draw.circle(self.screen, color, center, radius)
         pg.draw.circle(self.screen, (235, 240, 245), center, radius, 1)
 
+    def _draw_viewport(self, state: dict[str, Any]) -> None:
+        pg = self.pygame
+        pursuer = np.asarray(state["pursuer_pos"], dtype=np.float32)
+        heading = np.asarray(state.get("pursuer_heading", np.array([1.0, 0.0, 0.0])), dtype=np.float32)
+        heading_norm = float(np.linalg.norm(heading))
+        if heading_norm <= 1e-8:
+            return
+        heading = heading / heading_norm
+        viewport_range = float(state.get("viewport_range", 0.0))
+        if viewport_range <= 0.0:
+            return
+        ray_end = pursuer + heading * min(viewport_range, self.world_xy * 0.9)
+        color = (97, 214, 164) if state.get("target_visible", False) else (112, 128, 150)
+        pg.draw.line(self.screen, color, self.project(pursuer), self.project(ray_end), 2)
+
+        half_angle = np.deg2rad(float(state.get("horizontal_fov_deg", 60.0)) * 0.5)
+        yaw = float(np.arctan2(heading[1], heading[0]))
+        for side in (-1.0, 1.0):
+            direction = np.array(
+                [np.cos(yaw + side * half_angle), np.sin(yaw + side * half_angle), heading[2]],
+                dtype=np.float32,
+            )
+            direction_norm = float(np.linalg.norm(direction))
+            if direction_norm > 1e-8:
+                direction /= direction_norm
+                edge = pursuer + direction * min(viewport_range, self.world_xy * 0.65)
+                pg.draw.line(self.screen, (74, 96, 120), self.project(pursuer), self.project(edge), 1)
+
     def _draw_hud(self, state: dict[str, Any]) -> None:
         lines = [
             f"step {state['step_count']} / {state['max_steps']}",
             f"distance {state['distance']:.2f}",
             f"reward {state.get('reward', 0.0):.2f}",
-            f"captured {state.get('captured', False)} crashed {state.get('crashed', False)} oob {state.get('out_of_bounds', False)}",
+            f"visible {state.get('target_visible', False)} lock {state.get('has_target_lock', False)} unseen {state.get('steps_since_seen', 0)}",
+            f"flythrough {state.get('flythrough_intercept', False)} captured {state.get('captured', False)}",
+            f"crashed {state.get('crashed', False)} oob {state.get('out_of_bounds', False)}",
         ]
         for idx, text in enumerate(lines):
             image = self.font.render(text, True, (232, 236, 241))

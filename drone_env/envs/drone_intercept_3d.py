@@ -7,12 +7,29 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-from drone_env.utils.geometry import clip_vector_norm, distance, in_bounds, norm, safe_unit
+from drone_env.utils.geometry import (
+    angle_between_unit_vectors,
+    clip_vector_norm,
+    closest_point_on_segment,
+    distance,
+    in_bounds,
+    norm,
+    point_in_cone_or_frustum,
+    safe_unit,
+    segment_sphere_intersection,
+)
 
 TargetMode = Literal["straight", "evasive", "orbit"]
+ObservationMode = Literal["privileged", "viewport"]
 
 REWARD_KEYS = (
     "capture_reward",
+    "flythrough_intercept_reward",
+    "first_acquisition_reward",
+    "visibility_reward",
+    "reacquisition_reward",
+    "lost_target_penalty",
+    "aim_through_target_reward",
     "distance_progress_reward",
     "distance_penalty",
     "time_penalty",
@@ -35,6 +52,16 @@ class DroneIntercept3DConfig:
     target_max_speed: float = 10.0
     max_accel: float = 14.0
     capture_radius: float = 3.0
+    observation_mode: ObservationMode = "viewport"
+    horizontal_fov_deg: float = 90.0
+    vertical_fov_deg: float = 60.0
+    viewport_range: float = 80.0
+    lock_memory_steps: int = 20
+    intercept_radius: float = 2.0
+    flythrough_plane_radius: float = 2.0
+    min_closing_speed: float = 0.0
+    require_los_for_pursuit_reward: bool = False
+    require_flythrough_success: bool = True
     max_steps: int = 500
     safe_min_z: float = 2.0
     safe_max_z: float = 48.0
@@ -45,6 +72,12 @@ class DroneIntercept3DConfig:
     reward_weights: dict[str, float] = field(
         default_factory=lambda: {
             "capture_reward": 100.0,
+            "flythrough_intercept_reward": 140.0,
+            "first_acquisition_reward": 5.0,
+            "visibility_reward": 0.15,
+            "reacquisition_reward": 2.5,
+            "lost_target_penalty": -0.08,
+            "aim_through_target_reward": 1.0,
             "distance_progress_reward": 4.0,
             "distance_penalty": -0.03,
             "time_penalty": -0.05,
@@ -75,17 +108,30 @@ class DroneIntercept3DEnv(gym.Env):
             raise ValueError(f"Unsupported render_mode: {render_mode}")
 
         self.config = config or DroneIntercept3DConfig()
+        if self.config.observation_mode not in ("privileged", "viewport"):
+            raise ValueError(f"Unsupported observation_mode: {self.config.observation_mode}")
         self.target_mode: TargetMode = target_mode
         self.render_mode = render_mode
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
         self.observation_space = spaces.Box(
-            low=-np.inf, high=np.inf, shape=(20,), dtype=np.float32
+            low=-np.inf, high=np.inf, shape=(21,), dtype=np.float32
         )
 
         self.pursuer_pos = np.zeros(3, dtype=np.float32)
         self.pursuer_vel = np.zeros(3, dtype=np.float32)
+        self.previous_pursuer_pos = np.zeros(3, dtype=np.float32)
+        self.pursuer_heading = np.array([1.0, 0.0, 0.0], dtype=np.float32)
         self.target_pos = np.zeros(3, dtype=np.float32)
         self.target_vel = np.zeros(3, dtype=np.float32)
+        self.last_seen_target_pos = np.zeros(3, dtype=np.float32)
+        self.last_seen_target_vel = np.zeros(3, dtype=np.float32)
+        self.steps_since_seen = self.config.lock_memory_steps + 1
+        self.target_visible = False
+        self.has_target_lock = False
+        self._has_ever_seen_target = False
+        self._lost_target_this_step = False
+        self._first_acquisition_this_step = False
+        self._reacquisition_this_step = False
         self.previous_distance = 0.0
         self.previous_action = np.zeros(3, dtype=np.float32)
         self.step_count = 0
@@ -128,6 +174,20 @@ class DroneIntercept3DEnv(gym.Env):
             self.pursuer_pos = np.array([-30.0, 0.0, 15.0], dtype=np.float32)
             self.target_pos = np.array([30.0, 0.0, 20.0], dtype=np.float32)
 
+        self.previous_pursuer_pos = self.pursuer_pos.copy()
+        self.pursuer_heading = safe_unit(self.target_pos - self.pursuer_pos)
+        if norm(self.pursuer_heading) == 0.0:
+            self.pursuer_heading = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+        self.last_seen_target_pos = np.zeros(3, dtype=np.float32)
+        self.last_seen_target_vel = np.zeros(3, dtype=np.float32)
+        self.steps_since_seen = cfg.lock_memory_steps + 1
+        self.target_visible = False
+        self.has_target_lock = False
+        self._has_ever_seen_target = False
+        self._lost_target_this_step = False
+        self._first_acquisition_this_step = False
+        self._reacquisition_this_step = False
+        self._update_visibility_state()
         self.previous_distance = distance(self.pursuer_pos, self.target_pos)
         self._pursuer_trail = [self.pursuer_pos.copy()]
         self._target_trail = [self.target_pos.copy()]
@@ -141,13 +201,22 @@ class DroneIntercept3DEnv(gym.Env):
         action = np.clip(action, self.action_space.low, self.action_space.high).astype(np.float32)
 
         self.step_count += 1
+        self.previous_pursuer_pos = self.pursuer_pos.copy()
         accel = action * cfg.max_accel
         self.pursuer_vel = clip_vector_norm(self.pursuer_vel + accel * cfg.dt, cfg.pursuer_max_speed)
+        self._update_pursuer_heading()
         self.pursuer_pos = (self.pursuer_pos + self.pursuer_vel * cfg.dt).astype(np.float32)
         self._update_target()
+        self._update_visibility_state()
 
         current_distance = distance(self.pursuer_pos, self.target_pos)
-        captured = current_distance <= cfg.capture_radius
+        flythrough_intercept = self._flythrough_intercept()
+        proximity_capture = current_distance <= cfg.capture_radius
+        captured = bool(
+            flythrough_intercept
+            if cfg.require_flythrough_success
+            else (flythrough_intercept or proximity_capture)
+        )
         crashed = self.pursuer_pos[2] <= 0.0
         out_of_bounds = not in_bounds(
             self.pursuer_pos,
@@ -159,12 +228,18 @@ class DroneIntercept3DEnv(gym.Env):
         terminated = bool(captured or crashed or out_of_bounds)
         truncated = bool(self.step_count >= cfg.max_steps and not terminated)
 
-        reward, breakdown = self._compute_reward(action, captured, crashed, out_of_bounds)
+        reward, breakdown = self._compute_reward(
+            action,
+            captured,
+            crashed,
+            out_of_bounds,
+            flythrough_intercept=flythrough_intercept,
+        )
         self.previous_distance = current_distance
         self.previous_action = action.copy()
         self._append_trails()
 
-        info = self._base_info(captured, crashed, out_of_bounds)
+        info = self._base_info(captured, crashed, out_of_bounds, flythrough_intercept)
         info["reward_breakdown"] = breakdown
         self.last_reward = reward
         self.last_info = info.copy()
@@ -191,14 +266,20 @@ class DroneIntercept3DEnv(gym.Env):
 
     def _get_obs(self) -> np.ndarray:
         cfg = self.config
-        relative_pos = self.target_pos - self.pursuer_pos
-        relative_vel = self.target_vel - self.pursuer_vel
+        target_pos, target_vel, target_available = self._observation_target_state()
+        relative_pos = target_pos - self.pursuer_pos if target_available else np.zeros(3, dtype=np.float32)
+        relative_vel = target_vel - self.pursuer_vel if target_available else np.zeros(3, dtype=np.float32)
+        angle_to_target = 0.0
+        distance_to_estimate = 0.0
+        if target_available:
+            direction = safe_unit(relative_pos)
+            angle_to_target = angle_between_unit_vectors(self.pursuer_heading, direction) / np.pi
+            distance_to_estimate = distance(self.pursuer_pos, target_pos) / self.max_distance
         obs = np.concatenate(
             [
                 self._normalize_pos(self.pursuer_pos),
                 self.pursuer_vel / cfg.pursuer_max_speed,
-                self._normalize_pos(self.target_pos),
-                self.target_vel / cfg.target_max_speed,
+                self.pursuer_heading,
                 np.array(
                     [
                         relative_pos[0] / (2.0 * cfg.world_xy),
@@ -210,7 +291,12 @@ class DroneIntercept3DEnv(gym.Env):
                 relative_vel / (cfg.pursuer_max_speed + cfg.target_max_speed),
                 np.array(
                     [
-                        distance(self.pursuer_pos, self.target_pos) / self.max_distance,
+                        float(self.target_visible),
+                        float(self.has_target_lock),
+                        min(self.steps_since_seen, cfg.lock_memory_steps + 1)
+                        / max(1, cfg.lock_memory_steps + 1),
+                        angle_to_target,
+                        distance_to_estimate,
                         self.previous_distance / self.max_distance,
                     ],
                     dtype=np.float32,
@@ -225,6 +311,7 @@ class DroneIntercept3DEnv(gym.Env):
         captured: bool,
         crashed: bool,
         out_of_bounds: bool,
+        flythrough_intercept: bool = False,
     ) -> tuple[float, dict[str, float]]:
         cfg = self.config
         weights = cfg.reward_weights
@@ -243,8 +330,35 @@ class DroneIntercept3DEnv(gym.Env):
         if out_of_bounds:
             safety_penalty += weights["out_of_bounds_penalty"]
 
+        closest = closest_point_on_segment(
+            self.target_pos,
+            self.pursuer_pos,
+            self.pursuer_pos + safe_unit(self.pursuer_vel) * max(cfg.intercept_radius, cfg.viewport_range),
+        )
+        miss_distance = distance(closest, self.target_pos)
+        reward_has_los = self.target_visible or self.has_target_lock or not cfg.require_los_for_pursuit_reward
+        aim_reward = 0.0
+        if reward_has_los and norm(self.pursuer_vel) > 1e-6:
+            aim_reward = weights["aim_through_target_reward"] * float(
+                np.clip(1.0 - miss_distance / max(cfg.intercept_radius * 4.0, 1e-6), 0.0, 1.0)
+            )
+
         breakdown = {
             "capture_reward": weights["capture_reward"] if captured else 0.0,
+            "flythrough_intercept_reward": weights["flythrough_intercept_reward"]
+            if flythrough_intercept
+            else 0.0,
+            "first_acquisition_reward": weights["first_acquisition_reward"]
+            if self._first_acquisition_this_step
+            else 0.0,
+            "visibility_reward": weights["visibility_reward"] if self.target_visible else 0.0,
+            "reacquisition_reward": weights["reacquisition_reward"]
+            if self._reacquisition_this_step
+            else 0.0,
+            "lost_target_penalty": weights["lost_target_penalty"]
+            if (not self.target_visible and not self.has_target_lock)
+            else 0.0,
+            "aim_through_target_reward": aim_reward,
             "distance_progress_reward": weights["distance_progress_reward"]
             * float(np.clip(self.previous_distance - current_distance, -5.0, 5.0)),
             "distance_penalty": weights["distance_penalty"] * current_distance,
@@ -260,6 +374,69 @@ class DroneIntercept3DEnv(gym.Env):
             "safety_failure_penalty": safety_penalty,
         }
         return float(sum(breakdown.values())), {key: float(breakdown[key]) for key in REWARD_KEYS}
+
+    def _update_pursuer_heading(self) -> None:
+        velocity_heading = safe_unit(self.pursuer_vel)
+        if norm(velocity_heading) > 0.0:
+            self.pursuer_heading = velocity_heading
+
+    def _target_is_visible(self) -> bool:
+        cfg = self.config
+        return point_in_cone_or_frustum(
+            self.pursuer_pos,
+            self.pursuer_heading,
+            self.target_pos,
+            cfg.horizontal_fov_deg,
+            cfg.vertical_fov_deg,
+            cfg.viewport_range,
+        )
+
+    def _update_visibility_state(self) -> None:
+        was_visible = self.target_visible
+        had_lock = self.has_target_lock
+        visible = self._target_is_visible()
+        self._first_acquisition_this_step = False
+        self._reacquisition_this_step = False
+        self._lost_target_this_step = False
+        self.target_visible = visible
+        if visible:
+            self.last_seen_target_pos = self.target_pos.copy()
+            self.last_seen_target_vel = self.target_vel.copy()
+            self.steps_since_seen = 0
+            self.has_target_lock = True
+            if not self._has_ever_seen_target:
+                self._first_acquisition_this_step = True
+            elif not was_visible:
+                self._reacquisition_this_step = True
+            self._has_ever_seen_target = True
+        else:
+            self.steps_since_seen += 1
+            self.has_target_lock = self.steps_since_seen <= self.config.lock_memory_steps
+            self._lost_target_this_step = had_lock and not self.has_target_lock
+
+    def _observation_target_state(self) -> tuple[np.ndarray, np.ndarray, bool]:
+        if self.config.observation_mode == "privileged":
+            return self.target_pos, self.target_vel, True
+        if self.target_visible or self.has_target_lock:
+            return self.last_seen_target_pos, self.last_seen_target_vel, True
+        return np.zeros(3, dtype=np.float32), np.zeros(3, dtype=np.float32), False
+
+    def _flythrough_intercept(self) -> bool:
+        cfg = self.config
+        intersects = segment_sphere_intersection(
+            self.previous_pursuer_pos,
+            self.pursuer_pos,
+            self.target_pos,
+            cfg.intercept_radius,
+        )
+        if not intersects:
+            return False
+        if cfg.min_closing_speed <= 0.0:
+            return True
+        direction_to_target = safe_unit(self.target_pos - self.previous_pursuer_pos)
+        relative_vel = self.pursuer_vel - self.target_vel
+        closing_speed = float(np.dot(relative_vel, direction_to_target))
+        return bool(closing_speed >= cfg.min_closing_speed)
 
     def _update_target(self) -> None:
         if self.target_mode == "straight":
@@ -366,13 +543,25 @@ class DroneIntercept3DEnv(gym.Env):
         self._pursuer_trail = self._pursuer_trail[-cfg.trail_length :]
         self._target_trail = self._target_trail[-cfg.trail_length :]
 
-    def _base_info(self, captured: bool, crashed: bool, out_of_bounds: bool) -> dict[str, Any]:
+    def _base_info(
+        self,
+        captured: bool,
+        crashed: bool,
+        out_of_bounds: bool,
+        flythrough_intercept: bool = False,
+    ) -> dict[str, Any]:
         return {
             "captured": bool(captured),
             "crashed": bool(crashed),
             "out_of_bounds": bool(out_of_bounds),
             "distance": distance(self.pursuer_pos, self.target_pos),
             "target_mode": self.target_mode,
+            "target_visible": bool(self.target_visible),
+            "has_target_lock": bool(self.has_target_lock),
+            "steps_since_seen": int(self.steps_since_seen),
+            "last_seen_target_pos": self.last_seen_target_pos.copy(),
+            "flythrough_intercept": bool(flythrough_intercept),
+            "pursuer_heading": self.pursuer_heading.copy(),
         }
 
     def _render_state(self) -> dict[str, Any]:
@@ -386,6 +575,14 @@ class DroneIntercept3DEnv(gym.Env):
             "distance": distance(self.pursuer_pos, self.target_pos),
             "reward": self.last_reward,
             "captured": self.last_info.get("captured", False),
+            "flythrough_intercept": self.last_info.get("flythrough_intercept", False),
             "crashed": self.last_info.get("crashed", False),
             "out_of_bounds": self.last_info.get("out_of_bounds", False),
+            "target_visible": self.last_info.get("target_visible", False),
+            "has_target_lock": self.last_info.get("has_target_lock", False),
+            "steps_since_seen": self.last_info.get("steps_since_seen", 0),
+            "pursuer_heading": self.pursuer_heading.copy(),
+            "horizontal_fov_deg": self.config.horizontal_fov_deg,
+            "vertical_fov_deg": self.config.vertical_fov_deg,
+            "viewport_range": self.config.viewport_range,
         }

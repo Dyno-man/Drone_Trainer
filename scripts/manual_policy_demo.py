@@ -46,7 +46,8 @@ def main() -> None:
             improved = info["distance"] < start_distance
             print(
                 f"episode={episode} reward={total_reward:.3f} length={length} "
-                f"captured={info['captured']} start_distance={start_distance:.3f} "
+                f"captured={info['captured']} flythrough_intercept={info['flythrough_intercept']} "
+                f"start_distance={start_distance:.3f} "
                 f"final_distance={info['distance']:.3f} improved={improved}"
             )
     finally:

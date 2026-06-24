@@ -30,14 +30,19 @@ def set_state(
     env.target_pos = np.array(target_pos, dtype=np.float32)
     env.pursuer_vel = np.array(pursuer_vel, dtype=np.float32)
     env.target_vel = np.array(target_vel, dtype=np.float32)
+    env.previous_pursuer_pos = env.pursuer_pos.copy()
+    heading = env.target_pos - env.pursuer_pos
+    if np.linalg.norm(heading) > 1e-8:
+        env.pursuer_heading = (heading / np.linalg.norm(heading)).astype(np.float32)
     env.previous_distance = float(np.linalg.norm(env.target_pos - env.pursuer_pos))
     env.previous_action = np.zeros(3, dtype=np.float32)
+    env._update_visibility_state()
 
 
 def test_reset_returns_valid_obs() -> None:
     env = make_env()
     obs, info = env.reset(seed=1)
-    assert obs.shape == (20,)
+    assert obs.shape == env.observation_space.shape
     assert obs.dtype == np.float32
     assert np.isfinite(obs).all()
     assert env.observation_space.contains(obs)
@@ -48,7 +53,7 @@ def test_step_returns_valid_outputs() -> None:
     env = make_env(target_mode="straight")
     env.reset(seed=1)
     obs, reward, terminated, truncated, info = env.step(np.zeros(3, dtype=np.float32))
-    assert obs.shape == (20,)
+    assert obs.shape == env.observation_space.shape
     assert np.isfinite(obs).all()
     assert isinstance(reward, float)
     assert isinstance(terminated, bool)
@@ -140,16 +145,100 @@ def test_reward_breakdown_has_all_components() -> None:
     assert tuple(info["reward_breakdown"].keys()) == REWARD_KEYS
 
 
-def test_capture_terminates() -> None:
+def test_flythrough_capture_terminates() -> None:
     env = make_env(target_mode="straight")
     env.reset(seed=1)
-    set_state(env, target_pos=(1.0, 0.0, 10.0))
+    set_state(
+        env,
+        pursuer_pos=(-1.0, 0.0, 10.0),
+        target_pos=(0.0, 0.0, 10.0),
+        pursuer_vel=(20.0, 0.0, 0.0),
+    )
+    env.previous_pursuer_pos = np.array([-3.0, 0.0, 10.0], dtype=np.float32)
     obs, reward, terminated, truncated, info = env.step(np.zeros(3, dtype=np.float32))
     assert terminated
     assert not truncated
     assert info["captured"]
+    assert info["flythrough_intercept"]
     assert info["reward_breakdown"]["capture_reward"] == 100.0
+    assert info["reward_breakdown"]["flythrough_intercept_reward"] == 140.0
     assert reward > 0.0
+
+
+def test_side_pass_does_not_capture() -> None:
+    env = make_env(target_mode="straight")
+    env.reset(seed=1)
+    set_state(
+        env,
+        pursuer_pos=(-1.0, 3.5, 10.0),
+        target_pos=(0.0, 0.0, 10.0),
+        pursuer_vel=(20.0, 0.0, 0.0),
+    )
+    env.previous_pursuer_pos = np.array([-3.0, 3.5, 10.0], dtype=np.float32)
+    _, _, terminated, _, info = env.step(np.zeros(3, dtype=np.float32))
+    assert not terminated
+    assert not info["captured"]
+    assert not info["flythrough_intercept"]
+
+
+def test_minimum_closing_speed_gate_can_reject_slow_flythrough() -> None:
+    config = DroneIntercept3DConfig(max_steps=20, min_closing_speed=5.0)
+    env = make_env(config=config, target_mode="straight")
+    env.reset(seed=1)
+    set_state(
+        env,
+        pursuer_pos=(-0.1, 0.0, 10.0),
+        target_pos=(0.0, 0.0, 10.0),
+        pursuer_vel=(0.1, 0.0, 0.0),
+    )
+    env.previous_pursuer_pos = np.array([-0.2, 0.0, 10.0], dtype=np.float32)
+    assert not env._flythrough_intercept()
+    env.pursuer_vel = np.array([6.0, 0.0, 0.0], dtype=np.float32)
+    assert env._flythrough_intercept()
+
+
+def test_target_behind_viewport_hidden() -> None:
+    env = make_env(config=DroneIntercept3DConfig(max_steps=20, observation_mode="viewport"))
+    env.reset(seed=1)
+    set_state(env, pursuer_pos=(0.0, 0.0, 10.0), target_pos=(-10.0, 0.0, 10.0))
+    env.pursuer_heading = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    env.steps_since_seen = env.config.lock_memory_steps + 1
+    env.has_target_lock = False
+    env._update_visibility_state()
+    obs = env._get_obs()
+    assert not env.target_visible
+    assert not env.has_target_lock
+    np.testing.assert_allclose(obs[9:15], np.zeros(6), atol=1e-6)
+
+
+def test_target_inside_viewport_visible() -> None:
+    env = make_env(config=DroneIntercept3DConfig(max_steps=20, observation_mode="viewport"))
+    env.reset(seed=1)
+    set_state(env, pursuer_pos=(0.0, 0.0, 10.0), target_pos=(10.0, 0.0, 10.0))
+    env.pursuer_heading = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    env._update_visibility_state()
+    obs = env._get_obs()
+    assert env.target_visible
+    assert env.has_target_lock
+    assert obs[15] == 1.0
+    assert obs[16] == 1.0
+    assert np.isfinite(obs).all()
+
+
+def test_lock_memory_expires() -> None:
+    env = make_env(config=DroneIntercept3DConfig(max_steps=20, observation_mode="viewport", lock_memory_steps=2))
+    env.reset(seed=1)
+    set_state(env, pursuer_pos=(0.0, 0.0, 10.0), target_pos=(10.0, 0.0, 10.0))
+    env.pursuer_heading = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    env._update_visibility_state()
+    assert env.has_target_lock
+    env.target_pos = np.array([-10.0, 0.0, 10.0], dtype=np.float32)
+    env._update_visibility_state()
+    assert env.has_target_lock
+    env._update_visibility_state()
+    assert env.has_target_lock
+    env._update_visibility_state()
+    assert not env.has_target_lock
 
 
 def test_crash_terminates() -> None:
