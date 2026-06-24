@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -7,11 +8,20 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from drone_env.envs.drone_intercept_3d import DroneIntercept3DEnv
+import drone_env
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--env-id", default=drone_env.ENV_ID)
+    return parser.parse_args()
 
 
 def main() -> None:
-    env = DroneIntercept3DEnv()
+    import gymnasium as gym
+
+    args = parse_args()
+    env = gym.make(args.env_id)
     try:
         try:
             from stable_baselines3.common.env_checker import check_env
@@ -28,7 +38,7 @@ def main() -> None:
             assert np.isfinite(reward)
             assert isinstance(terminated, bool)
             assert isinstance(truncated, bool)
-            assert "reward_breakdown" in info
+            assert "reward_breakdown" in info or "reward_terms" in info
             print("Fallback Gymnasium API checks passed.")
         else:
             check_env(env, warn=True)

@@ -8,21 +8,30 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from drone_env.envs.drone_intercept_3d import DroneIntercept3DEnv
+import drone_env
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--env-id", default=drone_env.ENV_ID)
     parser.add_argument("--episodes", type=int, default=3)
     parser.add_argument("--target-mode", choices=["straight", "evasive", "orbit"], default="evasive")
+    parser.add_argument("--curriculum-level", type=int, default=None)
     parser.add_argument("--render-mode", choices=["human", "rgb_array"], default=None)
     parser.add_argument("--seed", type=int, default=7)
     return parser.parse_args()
 
 
 def main() -> None:
+    import gymnasium as gym
+
     args = parse_args()
-    env = DroneIntercept3DEnv(target_mode=args.target_mode, render_mode=args.render_mode)
+    kwargs = {"render_mode": args.render_mode}
+    if args.env_id == drone_env.ENV_ID:
+        kwargs["target_mode"] = args.target_mode
+    if args.curriculum_level is not None:
+        kwargs["curriculum_level"] = args.curriculum_level
+    env = gym.make(args.env_id, **kwargs)
     try:
         for episode in range(args.episodes):
             obs, info = env.reset(seed=args.seed + episode)
@@ -37,8 +46,9 @@ def main() -> None:
                 length += 1
             print(
                 f"episode={episode} reward={total_reward:.3f} length={length} "
-                f"captured={info['captured']} flythrough_intercept={info['flythrough_intercept']} "
-                f"final_distance={info['distance']:.3f}"
+                f"success={info.get('success', info.get('captured', False))} "
+                f"collision={info.get('collision', False)} "
+                f"final_distance={info.get('distance_to_target', info.get('distance', 0.0)):.3f}"
             )
     finally:
         env.close()

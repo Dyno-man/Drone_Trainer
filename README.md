@@ -7,6 +7,7 @@ Environment id:
 
 ```bash
 DroneIntercept3D-v0
+DroneIntercept3D-v2
 ```
 
 ## Setup
@@ -16,6 +17,8 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 pip install "stable-baselines3>=2.3"
+# Optional for PufferLib training integrations:
+pip install pufferlib
 ```
 
 ## Quick Checks
@@ -23,7 +26,11 @@ pip install "stable-baselines3>=2.3"
 ```bash
 python -m pytest -q
 python scripts/check_env.py
+python scripts/check_env.py --env-id DroneIntercept3D-v2
 python scripts/random_rollout.py --episodes 3
+python scripts/random_rollout.py --env-id DroneIntercept3D-v2 --curriculum-level 2 --episodes 3
+python scripts/v2_train_smoke.py --timesteps 64 --curriculum-level 0
+python scripts/v2_eval_smoke.py --episodes 3 --curriculum-level 0 --metrics-path /tmp/drone_intercept_v2_eval_metrics.csv
 python scripts/manual_policy_demo.py --target-mode straight --episodes 3
 python scripts/viewport_search_demo.py --target-mode straight
 python scripts/flythrough_regression_demo.py
@@ -46,6 +53,32 @@ Key viewport and intercept knobs live in `DroneIntercept3DConfig`:
 - `require_los_for_pursuit_reward`, `require_flythrough_success`
 
 Reward breakdown entries are stable every step. In addition to the original dense shaping, the environment reports `flythrough_intercept_reward`, `first_acquisition_reward`, `visibility_reward`, `reacquisition_reward`, `lost_target_penalty`, and `aim_through_target_reward`.
+
+## DroneIntercept3D-v2
+
+`DroneIntercept3D-v2` is a simulation-only, non-destructive environment upgrade. It keeps v1 behavior intact while adding a compact cylindrical drone abstraction, conservative rotor-span collision radius, 3D acceleration-limited motion, yaw/heading, upward-forward sensing, randomized tree-like obstacles, and target tracking. It does not implement payloads, damage, weapons, impact behavior, individual motor simulation, real hardware flight control, or swarm training.
+
+V2 success means reaching and holding a safe `capture_radius` around the target for `success_hold_steps`. The target's exact relative position is exposed only when visible through the configured sensor range/FOV and not occluded when occlusion is enabled.
+
+V2 action space:
+
+- `0`: forward acceleration command
+- `1`: right/lateral acceleration command
+- `2`: vertical acceleration command
+- `3`: yaw-rate command
+
+V2 reward terms are exposed as `info["reward_terms"]`: `distance_progress`, `target_visible`, `reacquisition`, `capture_hold`, `success`, `clearance`, `launch_altitude`, `time`, `control`, `collision`, and `out_of_bounds`.
+
+Curriculum levels:
+
+- `0`: 3D kinematics, hover target, no obstacles, no FOV limits
+- `1`: straight target motion
+- `2`: randomized obstacles
+- `3`: FOV limits
+- `4`: occlusion
+- `5`: random target patrol and seeded observation noise
+
+Full v2 details live in `docs/DRONE_INTERCEPT_3D_V2_SPEC.md`; checks live in `docs/DRONE_INTERCEPT_3D_V2_TEST_PLAN.md`.
 
 ## Train
 
