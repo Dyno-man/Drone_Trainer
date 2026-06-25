@@ -1,0 +1,14 @@
+{
+  "pack_name": "drone_intercept_v2_goal_pack",
+  "row_count": 90,
+  "files": [
+    "ENV_SPEC_SKELETON.md",
+    "IMPLEMENTATION_ORDER.md",
+    "QWEN_THERMONUCLEAR_REVIEW_PROMPT.md",
+    "README.md",
+    "SLASH_GOAL_PROMPT.md",
+    "atomic_goals_drone_intercept_3d_v2.csv"
+  ],
+  "created_for": "DroneIntercept3D-v2 RL environment planning and Codex handoff",
+  "safety_scope": "simulation-only, non-destructive capture/tracking radius semantics"
+}
