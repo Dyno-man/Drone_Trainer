@@ -10,6 +10,12 @@ from drone_env.utils.geometry import (
     safe_unit,
     segment_sphere_intersection,
 )
+from drone_env.utils.obstacle_geometry import (
+    Obstacle,
+    obstacle_clearance,
+    obstacle_collides,
+    segment_occluded,
+)
 
 
 def test_geometry_helpers_are_stable() -> None:
@@ -41,3 +47,17 @@ def test_segment_helpers() -> None:
     np.testing.assert_allclose(closest_point_on_segment(point, start, end), np.zeros(3), atol=1e-6)
     assert segment_sphere_intersection(start, end, np.zeros(3), 0.1)
     assert not segment_sphere_intersection(start + np.array([0.0, 2.0, 0.0]), end + np.array([0.0, 2.0, 0.0]), np.zeros(3), 0.5)
+
+
+def test_obstacle_geometry_canonical_module_path() -> None:
+    cylinder = Obstacle("cylinder", center=np.array([0.8, 0.0, 0.0], dtype=np.float32), radius=0.2, height=5.0)
+    assert obstacle_collides(np.array([0.0, 0.0, 2.0], dtype=np.float32), cylinder, 0.65)
+    assert obstacle_clearance(np.array([0.0, 0.0, 2.0], dtype=np.float32), cylinder, 0.65) < 0.0
+
+    sphere = Obstacle("sphere", center=np.array([2.0, 0.0, 0.0], dtype=np.float32), radius=0.5)
+    assert obstacle_clearance(np.array([4.0, 0.0, 0.0], dtype=np.float32), sphere, 0.25) == 1.25
+
+    start = np.array([0.0, 0.0, 2.0], dtype=np.float32)
+    end = np.array([10.0, 0.0, 2.0], dtype=np.float32)
+    blocker = Obstacle("cylinder", center=np.array([5.0, 0.0, 0.0], dtype=np.float32), radius=0.8, height=5.0)
+    assert segment_occluded(start, end, blocker)
