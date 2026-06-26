@@ -34,15 +34,13 @@ def set_v2_state(
     target_vel=(0.0, 0.0, 0.0),
     yaw=0.0,
 ) -> None:
-    env.agent_pos = np.array(agent_pos, dtype=np.float32)
-    env.target_pos = np.array(target_pos, dtype=np.float32)
-    env.agent_vel = np.array(agent_vel, dtype=np.float32)
-    env.target_vel = np.array(target_vel, dtype=np.float32)
-    env.agent_yaw = yaw
-    env.agent_yaw_rate = 0.0
-    env.previous_distance = float(np.linalg.norm(env.target_pos - env.agent_pos))
-    env.previous_target_visible = env.target_visible
-    env._update_visibility()
+    env.reset_with_state(
+        agent_pos=agent_pos,
+        target_pos=target_pos,
+        agent_vel=agent_vel,
+        target_vel=target_vel,
+        yaw=yaw,
+    )
 
 
 def obstacle_signature(env: DroneIntercept3DV2Env) -> list[tuple[str, tuple[float, ...], float, float]]:

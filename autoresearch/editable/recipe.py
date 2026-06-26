@@ -20,9 +20,9 @@ def select_action(obs: np.ndarray, info: dict[str, Any], step: int) -> np.ndarra
 
     if target_available:
         desired = (
-            cfg["intercept_gain"] * safe_unit(relative_pos)
-            + cfg["velocity_gain"] * relative_vel
-            - cfg["damping_gain"] * velocity
+            cfg.intercept_gain * safe_unit(relative_pos)
+            + cfg.velocity_gain * relative_vel
+            - cfg.damping_gain * velocity
         )
     else:
         phase = step * 0.19
@@ -30,13 +30,13 @@ def select_action(obs: np.ndarray, info: dict[str, Any], step: int) -> np.ndarra
         if np.linalg.norm(lateral) < 1e-6:
             lateral = np.array([0.0, 1.0, 0.0], dtype=np.float32)
         desired = (
-            cfg["search_forward_gain"] * heading
-            + cfg["search_lateral_gain"] * math.sin(phase) * safe_unit(lateral)
-            + np.array([0.0, 0.0, cfg["search_vertical_gain"] * math.cos(phase * 0.7)])
-            - cfg["damping_gain"] * velocity
+            cfg.search_forward_gain * heading
+            + cfg.search_lateral_gain * math.sin(phase) * safe_unit(lateral)
+            + np.array([0.0, 0.0, cfg.search_vertical_gain * math.cos(phase * 0.7)])
+            - cfg.damping_gain * velocity
         )
 
-    return np.clip(desired, -cfg["max_action"], cfg["max_action"]).astype(np.float32)
+    return np.clip(desired, -cfg.max_action, cfg.max_action).astype(np.float32)
 
 
 def hypothesis() -> str:

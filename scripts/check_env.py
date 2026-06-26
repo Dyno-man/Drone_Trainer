@@ -11,6 +11,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import drone_env
 
 
+def assert_info_schema(env_id: str, info: dict) -> None:
+    if env_id == drone_env.ENV_ID_V2:
+        assert "reward_terms" in info, f"{env_id} info missing v2 reward_terms key: {sorted(info)}"
+        return
+    if env_id == drone_env.ENV_ID:
+        assert "reward_breakdown" in info, f"{env_id} info missing v1 reward_breakdown key: {sorted(info)}"
+        return
+    assert (
+        "reward_breakdown" in info or "reward_terms" in info
+    ), f"{env_id} info must include a known reward schema key; got: {sorted(info)}"
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--env-id", default=drone_env.ENV_ID)
@@ -38,7 +50,7 @@ def main() -> None:
             assert np.isfinite(reward)
             assert isinstance(terminated, bool)
             assert isinstance(truncated, bool)
-            assert "reward_breakdown" in info or "reward_terms" in info
+            assert_info_schema(args.env_id, info)
             print("Fallback Gymnasium API checks passed.")
         else:
             check_env(env, warn=True)

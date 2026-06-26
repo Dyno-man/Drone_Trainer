@@ -44,6 +44,8 @@ V2_INFO_KEYS = (
     "nearest_obstacle_distance",
     "out_of_bounds",
     "time_limit",
+    "curriculum_level",
+    "obstacle_count",
 )
 
 # Stable observation schema for DroneIntercept3D-v2:
@@ -76,6 +78,9 @@ OBSERVATION_SCHEMA: tuple[tuple[str, int, int], ...] = (
     ("success_hold_fraction", 26, 27),
     ("step_fraction", 27, 28),
     ("nearest_obstacle_clearance", 28, 29),
+)
+OBSERVATION_NOISE_PROTECTED_END = next(
+    end for name, _, end in OBSERVATION_SCHEMA if name == "target_visible"
 )
 
 
@@ -114,6 +119,8 @@ class DroneIntercept3DConfigV2:
     enable_obstacles: bool = False
     enable_fov_limits: bool = False
     enable_occlusion: bool = False
+    # Curriculum level 5 enables this by default; callers may also opt in for
+    # robustness experiments at lower levels.
     observation_noise_std: float = 0.0
     capture_radius: float = 3.0
     success_hold_steps: int = 8
@@ -149,11 +156,16 @@ class Obstacle:
     radius: float = 0.0
     height: float = 0.0
     half_extents: np.ndarray | None = None
-    affects_collision: bool = True
     affects_occlusion: bool = True
 
 
 def make_curriculum_config(level: int, **overrides: Any) -> DroneIntercept3DConfigV2:
+    """Build the staged v2 curriculum.
+
+    Level 0 is a stationary target in open space. Later levels add straight
+    target motion, obstacles, field-of-view limits, occlusion, and finally
+    random patrol motion with light observation noise.
+    """
     if level < 0 or level > 5:
         raise ValueError("curriculum level must be between 0 and 5")
     cfg = DroneIntercept3DConfigV2(curriculum_level=level)
@@ -217,6 +229,8 @@ def obstacle_clearance(position: np.ndarray, obstacle: Obstacle, rotor_radius: f
         half = np.asarray(obstacle.half_extents, dtype=np.float32) + rotor_radius
         q = np.abs(position - center) - half
         outside = np.maximum(q, 0.0)
+        # Signed distance for an inflated axis-aligned box: outside distance is
+        # Euclidean, while inside distance is the least negative separating axis.
         inside = min(float(np.max(q)), 0.0)
         return float(np.linalg.norm(outside) + inside)
     raise ValueError(f"unsupported obstacle kind: {obstacle.kind}")
@@ -326,13 +340,72 @@ class DroneIntercept3DV2Env(gym.Env):
         self.agent_pos = self._sample_launch_position()
         self.target_pos = self._sample_target_position()
         direction = self.target_pos - self.agent_pos
-        self.agent_yaw = _normalize_angle(float(np.arctan2(direction[1], direction[0]) + self.np_random.uniform(-0.25, 0.25)))
+        self.agent_yaw = _normalize_angle(
+            float(np.arctan2(direction[1], direction[0]) + self.np_random.uniform(-0.25, 0.25))
+        )
         self.target_vel = self._initial_target_velocity()
         self.obstacles = self._generate_obstacles()
         self._update_visibility()
         self.previous_distance = distance(self.agent_pos, self.target_pos)
         self.last_reward_terms = {key: 0.0 for key in V2_REWARD_KEYS}
-        self.last_info = self._make_info(False, False, False, False)
+        nearest_clearance = self.nearest_obstacle_clearance()
+        self.last_info = self._make_info(
+            False,
+            False,
+            False,
+            False,
+            self.previous_distance,
+            nearest_clearance,
+        )
+        return self._get_obs(), self.last_info.copy()
+
+    def reset_with_state(
+        self,
+        *,
+        agent_pos: tuple[float, float, float] | np.ndarray,
+        target_pos: tuple[float, float, float] | np.ndarray,
+        agent_vel: tuple[float, float, float] | np.ndarray | None = None,
+        target_vel: tuple[float, float, float] | np.ndarray | None = None,
+        yaw: float = 0.0,
+        yaw_rate: float = 0.0,
+        preserve_target_memory: bool = True,
+    ) -> tuple[np.ndarray, dict[str, Any]]:
+        """Install a deterministic scenario state and refresh derived fields.
+
+        This is mainly intended for tests and scripted scenarios that need exact
+        geometry without duplicating the environment's internal bookkeeping.
+        """
+        self.agent_pos = np.asarray(agent_pos, dtype=np.float32)
+        self.target_pos = np.asarray(target_pos, dtype=np.float32)
+        self.agent_vel = (
+            np.zeros(3, dtype=np.float32)
+            if agent_vel is None
+            else np.asarray(agent_vel, dtype=np.float32)
+        )
+        self.target_vel = (
+            np.zeros(3, dtype=np.float32)
+            if target_vel is None
+            else np.asarray(target_vel, dtype=np.float32)
+        )
+        self.agent_yaw = _normalize_angle(float(yaw))
+        self.agent_yaw_rate = float(yaw_rate)
+        if not preserve_target_memory:
+            self.has_seen_target = False
+            self.time_since_seen = self.config.max_steps + 1
+            self.last_seen_target_pos = np.zeros(3, dtype=np.float32)
+        self.previous_distance = distance(self.agent_pos, self.target_pos)
+        self.previous_target_visible = self.target_visible
+        self._had_seen_before_visibility = self.has_seen_target
+        self._update_visibility()
+        nearest_clearance = self.nearest_obstacle_clearance()
+        self.last_info = self._make_info(
+            False,
+            False,
+            False,
+            False,
+            self.previous_distance,
+            nearest_clearance,
+        )
         return self._get_obs(), self.last_info.copy()
 
     def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
@@ -350,17 +423,32 @@ class DroneIntercept3DV2Env(gym.Env):
         nearest_clearance = self.nearest_obstacle_clearance()
         collision = bool(nearest_clearance <= 0.0)
         out_of_bounds = not in_bounds(self.agent_pos, cfg.world_xy, cfg.world_z, cfg.bounds_margin, include_floor=True)
-        in_capture = distance(self.agent_pos, self.target_pos) <= cfg.capture_radius
+        current_distance = distance(self.agent_pos, self.target_pos)
+        in_capture = current_distance <= cfg.capture_radius
         self.success_hold_steps = self.success_hold_steps + 1 if in_capture and not collision else 0
         success = self.success_hold_steps >= cfg.success_hold_steps
         terminated = bool(success or out_of_bounds or (collision and cfg.terminate_on_collision))
         truncated = bool(self.step_count >= cfg.max_steps and not terminated)
 
-        reward, reward_terms = self._compute_reward(action, collision, out_of_bounds, success, nearest_clearance)
-        self.previous_distance = distance(self.agent_pos, self.target_pos)
+        reward, reward_terms = self._compute_reward(
+            action,
+            collision,
+            out_of_bounds,
+            success,
+            nearest_clearance,
+            current_distance,
+        )
+        self.previous_distance = current_distance
         self.previous_action = action.copy()
         self.last_reward_terms = reward_terms
-        self.last_info = self._make_info(collision, out_of_bounds, success, truncated)
+        self.last_info = self._make_info(
+            collision,
+            out_of_bounds,
+            success,
+            truncated,
+            current_distance,
+            nearest_clearance,
+        )
         return self._get_obs(), reward, terminated, truncated, self.last_info.copy()
 
     def render(self) -> np.ndarray | None:
@@ -385,8 +473,14 @@ class DroneIntercept3DV2Env(gym.Env):
             frame[y0:y1, x0:x1][mask] = np.array([80, 130, 80], dtype=np.uint8)
         ax, ay = project(self.agent_pos)
         tx, ty = project(self.target_pos)
-        frame[max(0, ty - 4) : min(height, ty + 5), max(0, tx - 4) : min(width, tx + 5)] = np.array([50, 90, 220], dtype=np.uint8)
-        frame[max(0, ay - 4) : min(height, ay + 5), max(0, ax - 4) : min(width, ax + 5)] = np.array([220, 70, 50], dtype=np.uint8)
+        frame[max(0, ty - 4) : min(height, ty + 5), max(0, tx - 4) : min(width, tx + 5)] = np.array(
+            [50, 90, 220],
+            dtype=np.uint8,
+        )
+        frame[max(0, ay - 4) : min(height, ay + 5), max(0, ax - 4) : min(width, ax + 5)] = np.array(
+            [220, 70, 50],
+            dtype=np.uint8,
+        )
         return frame
 
     def close(self) -> None:
@@ -418,7 +512,14 @@ class DroneIntercept3DV2Env(gym.Env):
             candidate[2] = np.clip(candidate[2], cfg.launch_height_range[1] + 2.0, cfg.world_z * 0.9)
             if distance(candidate, self.agent_pos) >= cfg.target_distance_range[0] * 0.8:
                 return candidate.astype(np.float32)
-        return np.array([cfg.target_distance_range[0], 0.0, cfg.launch_height_range[1] + cfg.target_altitude_gap_range[0]], dtype=np.float32)
+        return np.array(
+            [
+                cfg.target_distance_range[0],
+                0.0,
+                cfg.launch_height_range[1] + cfg.target_altitude_gap_range[0],
+            ],
+            dtype=np.float32,
+        )
 
     def _initial_target_velocity(self) -> np.ndarray:
         cfg = self.config
@@ -453,6 +554,8 @@ class DroneIntercept3DV2Env(gym.Env):
             if agent_clearance < cfg.spawn_clearance or target_clearance < cfg.target_spawn_clearance:
                 continue
             obstacles.append(trunk)
+            # A tree-style obstacle may use one cylinder trunk plus one sphere
+            # canopy, but the configured obstacle_count remains the hard cap.
             if len(obstacles) < cfg.obstacle_count and self.config.curriculum_level >= 2:
                 canopy_center = center + np.array([0.0, 0.0, height], dtype=np.float32)
                 canopy = Obstacle("sphere", center=canopy_center, radius=radius * 3.0)
@@ -477,6 +580,13 @@ class DroneIntercept3DV2Env(gym.Env):
 
     def _integrate_target(self) -> None:
         cfg = self.config
+        self._update_target_velocity_for_behavior()
+        self.target_vel = clip_vector_norm(self.target_vel, cfg.target_max_speed)
+        self.target_pos = (self.target_pos + self.target_vel * cfg.dt).astype(np.float32)
+        self._reflect_target_at_bounds()
+
+    def _update_target_velocity_for_behavior(self) -> None:
+        cfg = self.config
         if cfg.target_behavior == "hover":
             self.target_vel = np.zeros(3, dtype=np.float32)
         elif cfg.target_behavior == "straight":
@@ -487,8 +597,9 @@ class DroneIntercept3DV2Env(gym.Env):
             if self._target_turn_countdown <= 0 or norm(self.target_vel) < 1e-6:
                 self.target_vel = self._initial_target_velocity()
                 self._target_turn_countdown = int(self.np_random.integers(10, 40))
-        self.target_vel = clip_vector_norm(self.target_vel, cfg.target_max_speed)
-        self.target_pos = (self.target_pos + self.target_vel * cfg.dt).astype(np.float32)
+
+    def _reflect_target_at_bounds(self) -> None:
+        cfg = self.config
         for axis in (0, 1):
             if self.target_pos[axis] < -cfg.world_xy:
                 self.target_pos[axis] = -cfg.world_xy
@@ -545,41 +656,50 @@ class DroneIntercept3DV2Env(gym.Env):
             min(
                 obstacle_clearance(self.agent_pos, obstacle, self.config.rotor_span_radius)
                 for obstacle in self.obstacles
-                if obstacle.affects_collision
             )
         )
 
     def obstacle_ray_distances(self) -> np.ndarray:
+        return self._obstacle_sensor_readings()[1]
+
+    def _obstacle_sensor_readings(self) -> tuple[float, np.ndarray]:
         cfg = self.config
-        values = np.ones(cfg.obstacle_ray_count, dtype=np.float32)
         if not self.obstacles:
-            return values
+            return cfg.sensor_range, np.ones(cfg.obstacle_ray_count, dtype=np.float32)
+        nearest = cfg.sensor_range
+        best_rays = np.full(cfg.obstacle_ray_count, cfg.sensor_range, dtype=np.float32)
         relative_angles = np.linspace(-np.pi, np.pi, cfg.obstacle_ray_count, endpoint=False)
         origin_xy = self.agent_pos[:2]
-        for idx, rel_angle in enumerate(relative_angles):
-            direction = np.array([np.cos(self.agent_yaw + rel_angle), np.sin(self.agent_yaw + rel_angle)], dtype=np.float32)
-            best = cfg.sensor_range
-            for obstacle in self.obstacles:
-                if obstacle.kind not in ("cylinder", "sphere"):
-                    continue
-                center_xy = obstacle.center[:2]
-                to_center = center_xy - origin_xy
+        directions = np.stack(
+            [
+                np.cos(self.agent_yaw + relative_angles),
+                np.sin(self.agent_yaw + relative_angles),
+            ],
+            axis=1,
+        ).astype(np.float32)
+        for obstacle in self.obstacles:
+            nearest = min(nearest, obstacle_clearance(self.agent_pos, obstacle, cfg.rotor_span_radius))
+            if obstacle.kind not in ("cylinder", "sphere"):
+                continue
+            center_xy = obstacle.center[:2]
+            to_center = center_xy - origin_xy
+            inflated = obstacle.radius + cfg.rotor_span_radius
+            for idx, direction in enumerate(directions):
                 projection = float(np.dot(to_center, direction))
                 if projection <= 0.0 or projection > cfg.sensor_range:
                     continue
                 lateral = abs(float(direction[0] * to_center[1] - direction[1] * to_center[0]))
-                inflated = obstacle.radius + cfg.rotor_span_radius
                 if lateral <= inflated:
-                    best = min(best, max(0.0, projection - inflated))
-            values[idx] = np.float32(np.clip(best / cfg.sensor_range, 0.0, 1.0))
-        return values
+                    best_rays[idx] = min(best_rays[idx], np.float32(max(0.0, projection - inflated)))
+        values = np.clip(best_rays / cfg.sensor_range, 0.0, 1.0).astype(np.float32)
+        return float(nearest), values
 
     def _get_obs(self) -> np.ndarray:
         cfg = self.config
         visible_rel = self.target_pos - self.agent_pos if self.target_visible else np.zeros(3, dtype=np.float32)
         last_rel = self.last_seen_target_pos - self.agent_pos if self.has_seen_target else np.zeros(3, dtype=np.float32)
-        obstacle_rays = self.obstacle_ray_distances()
-        nearest = np.clip(self.nearest_obstacle_clearance() / cfg.sensor_range, -1.0, 1.0)
+        nearest_clearance, obstacle_rays = self._obstacle_sensor_readings()
+        nearest = np.clip(nearest_clearance / cfg.sensor_range, -1.0, 1.0)
         obs = np.concatenate(
             [
                 self._normalize_position(self.agent_pos),
@@ -615,7 +735,7 @@ class DroneIntercept3DV2Env(gym.Env):
         ).astype(np.float32)
         if cfg.observation_noise_std > 0.0:
             noise = self.np_random.normal(0.0, cfg.observation_noise_std, size=obs.shape).astype(np.float32)
-            noise[:10] = 0.0
+            noise[:OBSERVATION_NOISE_PROTECTED_END] = 0.0
             obs = np.clip(obs + noise, self.observation_space.low, self.observation_space.high).astype(np.float32)
         return obs
 
@@ -626,17 +746,22 @@ class DroneIntercept3DV2Env(gym.Env):
         out_of_bounds: bool,
         success: bool,
         nearest_clearance: float,
+        current_distance: float | None = None,
     ) -> tuple[float, dict[str, float]]:
         cfg = self.config
         weights = cfg.reward_weights
-        current_distance = distance(self.agent_pos, self.target_pos)
-        progress = float(np.clip(self.previous_distance - current_distance, -3.0, 3.0))
+        if current_distance is None:
+            current_distance = distance(self.agent_pos, self.target_pos)
+        progress = float(np.clip((self.previous_distance - current_distance) / self.max_distance, -1.0, 1.0))
         reacquired = (
             self.target_visible
             and not self.previous_target_visible
             and self._had_seen_before_visibility
         )
-        clearance_fraction = max(0.0, cfg.clearance_penalty_distance - nearest_clearance) / max(1e-6, cfg.clearance_penalty_distance)
+        clearance_fraction = max(0.0, cfg.clearance_penalty_distance - nearest_clearance) / max(
+            1e-6,
+            cfg.clearance_penalty_distance,
+        )
         launch_fraction = 0.0
         if self.step_count <= cfg.launch_altitude_window_steps:
             launch_fraction = min(float(self.agent_pos[2]) / max(1e-6, cfg.launch_altitude_target), 1.0)
@@ -662,15 +787,17 @@ class DroneIntercept3DV2Env(gym.Env):
         out_of_bounds: bool,
         success: bool,
         truncated: bool,
+        distance_to_target: float,
+        nearest_clearance: float,
     ) -> dict[str, Any]:
         info = {
-            "distance_to_target": distance(self.agent_pos, self.target_pos),
+            "distance_to_target": float(distance_to_target),
             "target_visible": bool(self.target_visible),
             "collision": bool(collision),
             "success": bool(success),
             "success_hold_steps": int(self.success_hold_steps),
             "reward_terms": self.last_reward_terms.copy(),
-            "nearest_obstacle_distance": self.nearest_obstacle_clearance(),
+            "nearest_obstacle_distance": float(nearest_clearance),
             "out_of_bounds": bool(out_of_bounds),
             "time_limit": bool(truncated),
             "curriculum_level": int(self.config.curriculum_level),
@@ -679,21 +806,18 @@ class DroneIntercept3DV2Env(gym.Env):
         return info
 
     def _normalize_position(self, position: np.ndarray) -> np.ndarray:
-        return np.array(
-            [
-                np.clip(position[0] / self.config.world_xy, -1.0, 1.0),
-                np.clip(position[1] / self.config.world_xy, -1.0, 1.0),
-                np.clip(position[2] / self.config.world_z, -1.0, 1.0),
-            ],
-            dtype=np.float32,
-        )
+        return self._normalize_by(position, (self.config.world_xy, self.config.world_xy, self.config.world_z))
 
     def _normalize_relative(self, relative: np.ndarray) -> np.ndarray:
-        return np.array(
-            [
-                np.clip(relative[0] / (2.0 * self.config.world_xy), -1.0, 1.0),
-                np.clip(relative[1] / (2.0 * self.config.world_xy), -1.0, 1.0),
-                np.clip(relative[2] / self.config.world_z, -1.0, 1.0),
-            ],
-            dtype=np.float32,
+        return self._normalize_by(
+            relative,
+            (2.0 * self.config.world_xy, 2.0 * self.config.world_xy, self.config.world_z),
         )
+
+    @staticmethod
+    def _normalize_by(values: np.ndarray, denominators: tuple[float, float, float]) -> np.ndarray:
+        return np.clip(
+            np.asarray(values, dtype=np.float32) / np.asarray(denominators, dtype=np.float32),
+            -1.0,
+            1.0,
+        ).astype(np.float32)

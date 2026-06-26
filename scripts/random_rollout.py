@@ -27,11 +27,14 @@ def main() -> None:
 
     args = parse_args()
     kwargs = {"render_mode": args.render_mode}
-    if args.env_id == drone_env.ENV_ID:
-        kwargs["target_mode"] = args.target_mode
     if args.curriculum_level is not None:
         kwargs["curriculum_level"] = args.curriculum_level
-    env = gym.make(args.env_id, **kwargs)
+    try:
+        env = gym.make(args.env_id, target_mode=args.target_mode, **kwargs)
+    except TypeError as exc:
+        if "target_mode" not in str(exc):
+            raise
+        env = gym.make(args.env_id, **kwargs)
     try:
         for episode in range(args.episodes):
             obs, info = env.reset(seed=args.seed + episode)
