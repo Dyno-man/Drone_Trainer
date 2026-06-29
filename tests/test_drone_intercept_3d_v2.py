@@ -47,7 +47,7 @@ def obstacle_signature(env: DroneIntercept3DV2Env) -> list[tuple[str, tuple[floa
     return [
         (
             obstacle.kind,
-            tuple(np.round(obstacle.center.astype(float), 5)),
+            tuple(np.round(np.asarray(obstacle.center, dtype=float), 5)),
             round(obstacle.radius, 5),
             round(obstacle.height, 5),
         )
@@ -359,3 +359,136 @@ def test_random_policy_rollout_no_nan() -> None:
             obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
             assert np.isfinite(obs).all()
             assert np.isfinite(reward)
+
+
+# --- Bug 6: Dynamic observation_size ---
+
+def test_observation_size_dynamic() -> None:
+    """observation_size adapts to obstacle_ray_count."""
+    cfg_default = DroneIntercept3DConfigV2()
+    assert cfg_default.observation_size == 21 + cfg_default.obstacle_ray_count
+    assert cfg_default.observation_size == 29  # 21 + 8
+
+    cfg_16 = DroneIntercept3DConfigV2(obstacle_ray_count=16)
+    assert cfg_16.observation_size == 21 + 16
+
+
+def test_observation_shape_matches_ray_count() -> None:
+    """Observation vector length matches observation_space."""
+    cfg = DroneIntercept3DConfigV2(
+        enable_obstacles=True,
+        obstacle_ray_count=16,
+        obstacle_count=1,
+        max_steps=10,
+    )
+    env = DroneIntercept3DV2Env(config=cfg)
+    obs, _ = env.reset(seed=0)
+    assert obs.shape == (cfg.observation_size,)
+    assert obs.shape == (37,)
+    env.close()
+
+
+# --- Bug 4: Tree-style obstacle counting ---
+
+def test_generate_obstacles_count_exact() -> None:
+    """obstacle_count=N produces exactly N obstacles (including canopies)."""
+    for count in (1, 3, 5, 7):
+        cfg = DroneIntercept3DConfigV2(
+            enable_obstacles=True,
+            obstacle_count=count,
+            curriculum_level=2,
+            max_steps=5,
+            world_xy=80.0,
+        )
+        env = DroneIntercept3DV2Env(config=cfg)
+        obs, info = env.reset(seed=0)
+        assert len(env.obstacles) == count, f"level=2 count={count}: got {len(env.obstacles)}"
+        assert info["obstacle_count"] == count
+        env.close()
+
+
+def test_generate_obstacles_count_without_tree_mode() -> None:
+    """Level 1 (no tree mode) produces exactly N cylinders."""
+    count = 3
+    cfg = DroneIntercept3DConfigV2(
+        enable_obstacles=True,
+        obstacle_count=count,
+        curriculum_level=1,
+        max_steps=5,
+    )
+    env = DroneIntercept3DV2Env(config=cfg)
+    obs, info = env.reset(seed=0)
+    assert len(env.obstacles) == count
+    assert all(o.kind == "cylinder" for o in env.obstacles)
+    env.close()
+
+
+# --- Bug 7: Curriculum config levels ---
+
+def test_curriculum_config_levels_dict() -> None:
+    """Each level applies correct overrides via _LEVEL_UPDATES."""
+    levels = [make_curriculum_config(level) for level in range(6)]
+
+    # Level 0: defaults
+    assert levels[0].target_behavior == "hover"
+    assert not levels[0].enable_obstacles
+    assert not levels[0].enable_fov_limits
+    assert not levels[0].enable_occlusion
+    assert levels[0].observation_noise_std == 0.0
+
+    # Level 1: straight target
+    assert levels[1].target_behavior == "straight"
+    assert levels[1].target_max_speed == 3.0
+    assert not levels[1].enable_obstacles
+
+    # Level 2: + obstacles
+    assert levels[2].enable_obstacles
+    assert levels[2].obstacle_count == 3
+
+    # Level 3: + FOV limits
+    assert levels[3].enable_fov_limits
+
+    # Level 4: + occlusion
+    assert levels[4].enable_occlusion
+    assert levels[4].obstacle_count == 5
+
+    # Level 5: + random_patrol, noise
+    assert levels[5].target_behavior == "random_patrol"
+    assert levels[5].obstacle_count == 7
+    assert levels[5].observation_noise_std == 0.01
+    assert levels[5].target_max_speed == 4.5
+
+
+def test_curriculum_config_overrides_work() -> None:
+    """Override kwargs still work with the dict-based config."""
+    cfg = make_curriculum_config(3, obstacle_count=10, enable_fov_limits=False)
+    assert cfg.obstacle_count == 10
+    assert not cfg.enable_fov_limits  # override wins over level 3's default
+
+
+# --- Bug 9: Target fallback randomization ---
+
+def test_sample_target_fallback_random() -> None:
+    """Fallback position is not deterministic across calls.
+
+    Force the 1000-retry loop to exhaust by making the world tiny
+    while requiring a large minimum target distance.
+    """
+    cfg = DroneIntercept3DConfigV2(
+        max_steps=5,
+        world_xy=1.0,  # tiny world
+        world_z=10.0,  # enough headroom for launch_height_range[1] + 2.0
+        target_distance_range=(100.0, 200.0),  # impossible distance forces fallback
+        launch_height_range=(0.5, 0.8),
+    )
+    env = DroneIntercept3DV2Env(config=cfg)
+    env.reset(seed=42)
+
+    fallback1 = env._sample_target_position()
+    fallback2 = env._sample_target_position()
+    assert not np.allclose(fallback1, fallback2), "fallback should differ between calls"
+    # Both should be valid within bounds (clamped)
+    z_min = max(cfg.launch_height_range[1] + 2.0, 0.0)
+    z_max = cfg.world_z * 0.9
+    assert z_min <= fallback1[2] <= z_max, f"z={fallback1[2]} not in [{z_min}, {z_max}]"
+    env.close()

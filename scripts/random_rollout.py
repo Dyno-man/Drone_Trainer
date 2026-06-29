@@ -29,12 +29,10 @@ def main() -> None:
     kwargs = {"render_mode": args.render_mode}
     if args.curriculum_level is not None:
         kwargs["curriculum_level"] = args.curriculum_level
-    try:
-        env = gym.make(args.env_id, target_mode=args.target_mode, **kwargs)
-    except TypeError as exc:
-        if "target_mode" not in str(exc):
-            raise
+    if "v2" in args.env_id:
         env = gym.make(args.env_id, **kwargs)
+    else:
+        env = gym.make(args.env_id, target_mode=args.target_mode, **kwargs)
     try:
         for episode in range(args.episodes):
             obs, info = env.reset(seed=args.seed + episode)

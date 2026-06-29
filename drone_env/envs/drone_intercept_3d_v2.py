@@ -17,7 +17,6 @@ from drone_env.utils.geometry import (
 )
 from drone_env.utils.obstacle_geometry import (
     Obstacle,
-    ObstacleKind,
     obstacle_clearance,
     obstacle_collides,
     segment_occluded,
@@ -151,8 +150,20 @@ class DroneIntercept3DConfigV2:
 
     @property
     def observation_size(self) -> int:
-        return 29
+        return 21 + self.obstacle_ray_count
 
+_LEVEL_UPDATES: dict[int, dict[str, Any]] = {
+    1: {"target_behavior": "straight", "target_max_speed": 3.0},
+    2: {"enable_obstacles": True, "obstacle_count": 3},
+    3: {"enable_fov_limits": True},
+    4: {"enable_occlusion": True, "obstacle_count": 5},
+    5: {
+        "target_behavior": "random_patrol",
+        "obstacle_count": 7,
+        "observation_noise_std": 0.01,
+        "target_max_speed": 4.5,
+    },
+}
 
 def make_curriculum_config(level: int, **overrides: Any) -> DroneIntercept3DConfigV2:
     """Build the staged v2 curriculum.
@@ -164,22 +175,9 @@ def make_curriculum_config(level: int, **overrides: Any) -> DroneIntercept3DConf
     if level < 0 or level > 5:
         raise ValueError("curriculum level must be between 0 and 5")
     cfg = DroneIntercept3DConfigV2(curriculum_level=level)
-    if level >= 1:
-        cfg = replace(cfg, target_behavior="straight", target_max_speed=3.0)
-    if level >= 2:
-        cfg = replace(cfg, enable_obstacles=True, obstacle_count=3)
-    if level >= 3:
-        cfg = replace(cfg, enable_fov_limits=True)
-    if level >= 4:
-        cfg = replace(cfg, enable_occlusion=True, obstacle_count=5)
-    if level >= 5:
-        cfg = replace(
-            cfg,
-            target_behavior="random_patrol",
-            obstacle_count=7,
-            observation_noise_std=0.01,
-            target_max_speed=4.5,
-        )
+    for lvl in range(1, level + 1):
+        if lvl in _LEVEL_UPDATES:
+            cfg = replace(cfg, **_LEVEL_UPDATES[lvl])
     if overrides:
         cfg = replace(cfg, **overrides)
     return cfg
@@ -449,14 +447,18 @@ class DroneIntercept3DV2Env(gym.Env):
             candidate[2] = np.clip(candidate[2], cfg.launch_height_range[1] + 2.0, cfg.world_z * 0.9)
             if distance(candidate, self.agent_pos) >= cfg.target_distance_range[0] * 0.8:
                 return candidate.astype(np.float32)
-        return np.array(
-            [
-                cfg.target_distance_range[0],
-                0.0,
-                cfg.launch_height_range[1] + cfg.target_altitude_gap_range[0],
-            ],
+        yaw = float(self.np_random.uniform(-np.pi, np.pi))
+        horizontal_distance = float(self.np_random.uniform(*cfg.target_distance_range))
+        altitude_gap = float(self.np_random.uniform(*cfg.target_altitude_gap_range))
+        fallback = np.array(
+            [np.cos(yaw) * horizontal_distance, np.sin(yaw) * horizontal_distance, altitude_gap],
             dtype=np.float32,
         )
+        fallback = self.agent_pos + fallback
+        fallback[0] = np.clip(fallback[0], -cfg.world_xy * 0.85, cfg.world_xy * 0.85)
+        fallback[1] = np.clip(fallback[1], -cfg.world_xy * 0.85, cfg.world_xy * 0.85)
+        fallback[2] = np.clip(fallback[2], cfg.launch_height_range[1] + 2.0, cfg.world_z * 0.9)
+        return fallback.astype(np.float32)
 
     def _initial_target_velocity(self) -> np.ndarray:
         cfg = self.config
@@ -471,36 +473,43 @@ class DroneIntercept3DV2Env(gym.Env):
         cfg = self.config
         if not cfg.enable_obstacles or cfg.obstacle_count <= 0:
             return []
+
+        is_tree_mode = cfg.curriculum_level >= 2
         obstacles: list[Obstacle] = []
         attempts = 0
-        while len(obstacles) < cfg.obstacle_count and attempts < cfg.obstacle_count * 200:
+        max_attempts = cfg.obstacle_count * 400
+
+        while len(obstacles) < cfg.obstacle_count and attempts < max_attempts:
             attempts += 1
             radius = float(self.np_random.uniform(cfg.obstacle_min_radius, cfg.obstacle_max_radius))
             height = float(self.np_random.uniform(cfg.obstacle_min_height, cfg.obstacle_max_height))
-            center = np.array(
-                [
-                    self.np_random.uniform(-cfg.world_xy * 0.75, cfg.world_xy * 0.75),
-                    self.np_random.uniform(-cfg.world_xy * 0.75, cfg.world_xy * 0.75),
-                    0.0,
-                ],
-                dtype=np.float32,
+
+            center = (
+                float(self.np_random.uniform(-cfg.world_xy * 0.75, cfg.world_xy * 0.75)),
+                float(self.np_random.uniform(-cfg.world_xy * 0.75, cfg.world_xy * 0.75)),
+                0.0,
             )
+
             trunk = Obstacle("cylinder", center=center, radius=radius, height=height)
             agent_clearance = obstacle_clearance(self.agent_pos, trunk, cfg.rotor_span_radius)
             target_clearance = obstacle_clearance(self.target_pos, trunk, cfg.rotor_span_radius)
             if agent_clearance < cfg.spawn_clearance or target_clearance < cfg.target_spawn_clearance:
                 continue
-            obstacles.append(trunk)
-            # A tree-style obstacle may use one cylinder trunk plus one sphere
-            # canopy, but the configured obstacle_count remains the hard cap.
-            if len(obstacles) < cfg.obstacle_count and self.config.curriculum_level >= 2:
-                canopy_center = center + np.array([0.0, 0.0, height], dtype=np.float32)
+
+            if is_tree_mode and len(obstacles) < cfg.obstacle_count:
+                canopy_center = (center[0], center[1], height)
                 canopy = Obstacle("sphere", center=canopy_center, radius=radius * 3.0)
-                if (
-                    obstacle_clearance(self.agent_pos, canopy, cfg.rotor_span_radius) >= cfg.spawn_clearance
-                    and obstacle_clearance(self.target_pos, canopy, cfg.rotor_span_radius) >= cfg.target_spawn_clearance
-                ):
+                canopy_agent_clear = obstacle_clearance(self.agent_pos, canopy, cfg.rotor_span_radius)
+                canopy_target_clear = obstacle_clearance(self.target_pos, canopy, cfg.rotor_span_radius)
+                if (canopy_agent_clear >= cfg.spawn_clearance
+                        and canopy_target_clear >= cfg.target_spawn_clearance):
+                    obstacles.append(trunk)
                     obstacles.append(canopy)
+                else:
+                    obstacles.append(trunk)
+            else:
+                obstacles.append(trunk)
+
         return obstacles[: cfg.obstacle_count]
 
     def _integrate_agent(self, action: np.ndarray) -> None:
@@ -615,10 +624,10 @@ class DroneIntercept3DV2Env(gym.Env):
             axis=1,
         ).astype(np.float32)
         for obstacle in self.obstacles:
-            nearest = min(nearest, obstacle_clearance(self.agent_pos, obstacle, cfg.rotor_span_radius))
             if obstacle.kind not in ("cylinder", "sphere"):
                 continue
-            center_xy = obstacle.center[:2]
+            nearest = min(nearest, obstacle_clearance(self.agent_pos, obstacle, cfg.rotor_span_radius))
+            center_xy = np.asarray(obstacle.center, dtype=np.float32)[:2]
             to_center = center_xy - origin_xy
             inflated = obstacle.radius + cfg.rotor_span_radius
             for idx, direction in enumerate(directions):
