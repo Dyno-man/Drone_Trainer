@@ -92,6 +92,8 @@ OBSERVATION_NOISE_PROTECTED_END = next(
 class DroneIntercept3DConfigV2:
     world_xy: float = 80.0
     world_z: float = 45.0
+    render_width: int = 960
+    render_height: int = 720
     bounds_margin: float = 0.0
     dt: float = 0.1
     max_steps: int = 500
@@ -202,7 +204,7 @@ def _normalize_angle(angle: float) -> float:
 
 
 class DroneIntercept3DV2Env(gym.Env):
-    metadata = {"render_modes": ["rgb_array"], "render_fps": 30}
+    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
 
     def __init__(
         self,
@@ -211,7 +213,7 @@ class DroneIntercept3DV2Env(gym.Env):
         render_mode: str | None = None,
     ) -> None:
         super().__init__()
-        if render_mode not in (None, "rgb_array"):
+        if render_mode not in (None, "human", "rgb_array"):
             raise ValueError(f"unsupported render_mode: {render_mode}")
         if config is None:
             config = make_curriculum_config(0 if curriculum_level is None else curriculum_level)
@@ -245,6 +247,7 @@ class DroneIntercept3DV2Env(gym.Env):
         self.last_reward_terms = {key: 0.0 for key in V2_REWARD_KEYS}
         self.last_info: dict[str, Any] = {}
         self._target_turn_countdown = 0
+        self._renderer: DroneRenderer | None = None
 
     @property
     def max_distance(self) -> float:
@@ -384,42 +387,31 @@ class DroneIntercept3DV2Env(gym.Env):
             current_distance,
             nearest_clearance,
         )
+        if self.render_mode == "human":
+            self.render()
         return self._get_obs(), reward, terminated, truncated, self.last_info.copy()
 
     def render(self) -> np.ndarray | None:
         if self.render_mode is None:
             return None
-        width, height = 640, 480
-        frame = np.full((height, width, 3), 245, dtype=np.uint8)
-        scale = min(width, height) / (2.2 * self.config.world_xy)
-        center = np.array([width / 2.0, height / 2.0], dtype=np.float32)
+        if self._renderer is None:
+            from drone_env.utils.rendering import DroneRenderer
 
-        def project(pos: np.ndarray) -> tuple[int, int]:
-            point = center + np.array([pos[0], -pos[1]], dtype=np.float32) * scale
-            return int(np.clip(point[0], 0, width - 1)), int(np.clip(point[1], 0, height - 1))
-
-        for obstacle in self.obstacles:
-            x, y = project(obstacle.center)
-            r = max(1, int((obstacle.radius + self.config.rotor_span_radius) * scale))
-            y0, y1 = max(0, y - r), min(height, y + r + 1)
-            x0, x1 = max(0, x - r), min(width, x + r + 1)
-            yy, xx = np.ogrid[y0:y1, x0:x1]
-            mask = (xx - x) ** 2 + (yy - y) ** 2 <= r**2
-            frame[y0:y1, x0:x1][mask] = np.array([80, 130, 80], dtype=np.uint8)
-        ax, ay = project(self.agent_pos)
-        tx, ty = project(self.target_pos)
-        frame[max(0, ty - 4) : min(height, ty + 5), max(0, tx - 4) : min(width, tx + 5)] = np.array(
-            [50, 90, 220],
-            dtype=np.uint8,
-        )
-        frame[max(0, ay - 4) : min(height, ay + 5), max(0, ax - 4) : min(width, ax + 5)] = np.array(
-            [220, 70, 50],
-            dtype=np.uint8,
-        )
-        return frame
+            self._renderer = DroneRenderer(
+                self.config.render_width,
+                self.config.render_height,
+                self.config.world_xy,
+                self.config.world_z,
+                self.render_mode,
+            )
+        state = self._render_state()
+        return self._renderer.draw(state)
 
     def close(self) -> None:
-        return None
+        if self._renderer is not None:
+            self._renderer.close()
+            self._renderer = None
+
 
     def _sample_launch_position(self) -> np.ndarray:
         cfg = self.config
@@ -767,3 +759,38 @@ class DroneIntercept3DV2Env(gym.Env):
             -1.0,
             1.0,
         ).astype(np.float32)
+
+    def _render_state(self) -> dict[str, Any]:
+        """Build a render-state dict compatible with DroneRenderer.draw()."""
+        obstacles = []
+        for obs in self.obstacles:
+            obstacles.append({
+                "type": obs.kind,
+                "center": list(obs.center),
+                "radius": obs.radius,
+                "height": obs.height,
+            })
+
+        return {
+            "pursuer_pos": self.agent_pos,
+            "target_pos": self.target_pos,
+            "yaw": self.agent_yaw,
+            "body_radius": self.config.body_radius,
+            "body_height": self.config.body_height,
+            "rotor_span_radius": self.config.rotor_span_radius,
+            "pursuer_heading": yaw_to_forward(self.agent_yaw),
+            "horizontal_fov_deg": self.config.sensor_horizontal_fov_deg,
+            "vertical_fov_deg": self.config.sensor_vertical_fov_deg,
+            "viewport_range": self.config.sensor_range,
+            "obstacles": tuple(obstacles),
+            "step_count": self.step_count,
+            "max_steps": self.config.max_steps,
+            "distance": distance(self.agent_pos, self.target_pos),
+            "reward": float(sum(self.last_reward_terms.values())),
+            "target_visible": self.target_visible,
+            "has_target_lock": False,
+            "steps_since_seen": int(self.time_since_seen),
+            "collision": self.last_info.get("collision", False),
+            "out_of_bounds": self.last_info.get("out_of_bounds", False),
+            "success": self.last_info.get("success", False),
+        }

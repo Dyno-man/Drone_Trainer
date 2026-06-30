@@ -54,14 +54,28 @@ class DroneRenderer:
         self._draw_floor()
         self._draw_box()
 
+        # Draw v2 obstacles (cylinders, spheres) behind drones
+        for obs in state.get("obstacles", ()):
+            self._draw_obstacle(obs)
+
         pursuer = state["pursuer_pos"]
         target = state["target_pos"]
         self.draw_polyline(state.get("pursuer_trail", []), (64, 180, 255))
         self.draw_polyline(state.get("target_trail", []), (255, 163, 77))
         pg.draw.line(self.screen, (190, 198, 208), self.project(pursuer), self.project(target), 1)
         self._draw_viewport(state)
-        self._draw_drone(pursuer, (54, 162, 235), 7)
+
+        # v2: draw explicit drone body for agent when yaw/body params provided
+        yaw = state.get("yaw")
+        if yaw is not None:
+            self._draw_drone_body(pursuer, (54, 162, 235), yaw,
+                                  state.get("body_radius", 0.18),
+                                  state.get("body_height", 0.45),
+                                  state.get("rotor_span_radius", 0.65))
+        else:
+            self._draw_drone(pursuer, (54, 162, 235), 7)
         self._draw_drone(target, (245, 126, 43), 7)
+
         if state.get("flythrough_intercept", False):
             pg.draw.circle(self.screen, (124, 255, 178), self.project(target), 18, 3)
         self._draw_hud(state)
@@ -72,6 +86,10 @@ class DroneRenderer:
             return None
         array = pg.surfarray.array3d(self.screen)
         return np.transpose(array, (1, 0, 2)).copy()
+
+    # ------------------------------------------------------------------
+    # v1 helpers (unchanged)
+    # ------------------------------------------------------------------
 
     def _draw_floor(self) -> None:
         pg = self.pygame
@@ -160,3 +178,110 @@ class DroneRenderer:
     def close(self) -> None:
         self.pygame.display.quit()
         self.pygame.quit()
+
+    # ------------------------------------------------------------------
+    # v2 extras (stateless — all args from state dict)
+    # ------------------------------------------------------------------
+
+    def _draw_obstacle(self, obs: dict[str, Any]) -> None:
+        """Dispatch to cylinder or sphere drawing based on obstacle type."""
+        if obs.get("type") == "sphere":
+            self._draw_sphere(obs)
+        else:
+            self._draw_cylinder(obs)
+
+    def _draw_cylinder(self, obs: dict[str, Any]) -> None:
+        """Draw a vertical cylinder as two wireframe circles (base + top) + vertical edges."""
+        center = np.asarray(obs["center"], dtype=np.float32)
+        radius = obs["radius"]
+        height = obs["height"]
+        z_min = float(center[2])       # cylinder base
+        z_max = z_min + height          # cylinder top
+        color = (100, 100, 110)
+        segments = 16
+
+        def _circle_projected(z: float) -> list[tuple[int, int]]:
+            pts: list[tuple[int, int]] = []
+            for i in range(segments):
+                a = 2.0 * np.pi * i / segments
+                x = center[0] + radius * np.cos(a)
+                y = center[1] + radius * np.sin(a)
+                pts.append(self.project(np.array([x, y, z], dtype=np.float32)))
+            return pts
+
+        base_pts = _circle_projected(z_min)
+        top_pts = _circle_projected(z_max)
+
+        if len(base_pts) >= 2:
+            self.pygame.draw.lines(self.screen, color, True, base_pts, 1)
+        if len(top_pts) >= 2:
+            self.pygame.draw.lines(self.screen, color, True, top_pts, 1)
+        # Vertical edges (every 4th for readability)
+        for i in range(0, segments, 4):
+            self.pygame.draw.line(self.screen, color, base_pts[i], top_pts[i], 1)
+
+    def _draw_sphere(self, obs: dict[str, Any]) -> None:
+        """Draw a sphere as a wireframe circle in screen space."""
+        center = np.asarray(obs["center"], dtype=np.float32)
+        radius = obs["radius"]
+        color = (100, 100, 110)
+        proj = self.project(center)
+        scale = min(self.width, self.height) / (self.world_xy * 3.0)
+        # Compute screen-space radius via x-offset projection
+        screen_r = int(
+            abs(
+                self.project(np.array([center[0] + radius, center[1], center[2]], dtype=np.float32))[0]
+                - proj[0]
+            )
+        )
+        self.pygame.draw.circle(self.screen, color, proj, max(1, screen_r), 1)
+
+    def _draw_drone_body(
+        self,
+        position: np.ndarray,
+        color: tuple[int, int, int],
+        yaw: float,
+        body_radius: float,
+        _body_height: float,
+        rotor_span_radius: float,
+    ) -> None:
+        """Draw a quadcopter: body + 4 rotor arms + 4 rotors, oriented by yaw.
+
+        Drawing is done in screen space; yaw=0 means the drone points along +x
+        (right on screen), yaw=pi/2 means +y (up on screen).
+        """
+        pg = self.pygame
+        screen_pos = self.project(position)
+        scale = min(self.width, self.height) / (self.world_xy * 3.0)
+
+        body_size = int(max(3, body_radius * 2.0 * scale * 0.7))
+        arm_span = int(max(4, rotor_span_radius * scale * 0.6))
+
+        cy, sy = np.cos(yaw), np.sin(yaw)
+        # arm_dirs: front(+x), right(+y), back(-x), left(-y) in drone frame
+        arm_dirs = [
+            (cy, sy),       # front
+            (-sy, cy),      # right
+            (-cy, -sy),     # back
+            (sy, -cy),      # left
+        ]
+
+        arm_color = (180, 185, 190)
+        for dx, dy in arm_dirs:
+            x1 = int(screen_pos[0] + dx * arm_span * 0.4)
+            y1 = int(screen_pos[1] - dy * arm_span * 0.4)
+            x2 = int(screen_pos[0] + dx * arm_span)
+            y2 = int(screen_pos[1] - dy * arm_span)
+            pg.draw.line(self.screen, arm_color, (x1, y1), (x2, y2), 2)
+
+        rotor_color = (200, 205, 210)
+        rotor_r = max(2, arm_span // 4)
+        for dx, dy in arm_dirs:
+            rx = int(screen_pos[0] + dx * arm_span)
+            ry = int(screen_pos[1] - dy * arm_span)
+            pg.draw.circle(self.screen, rotor_color, (rx, ry), rotor_r)
+            pg.draw.circle(self.screen, (50, 50, 55), (rx, ry), rotor_r, 1)
+
+        body_r = max(2, body_size // 2)
+        pg.draw.circle(self.screen, color, screen_pos, body_size)
+        pg.draw.circle(self.screen, (235, 240, 245), screen_pos, body_size, 1)
