@@ -2,6 +2,15 @@
 
 Goal: improve viewport-based search and true fly-through interception without rebuilding the environment.
 
+Current best (quick mode): score=115.76, flythrough_success_rate=1.0 (4/4 scenarios).
+Evasive solved: `evasive_high_viewport` — final_distance=1.8m, ~57 steps to intercept.
+
+Current best config (verified on quick & medium mode):
+- `intercept_gain=1.52`, `velocity_gain=2.0`, `lead_gain=10.0`, `damping_gain=0.15`
+- Recipe: predictive lead (`lead_pos = relative_pos + 0.05 * relative_vel`) + blend aim + cross-product perpendicular lead + velocity correction
+- Blend: `blend = clip(1.0 - dist / 0.3, 0, 1)` — conservative when far, aggressive when close
+- Search: spiral pattern with sine oscillation (unchanged from v1)
+
 Primary metric: `flythrough_success_rate`
 
 Hard rejection gates:
@@ -119,10 +128,28 @@ Reject:
 - changes require touching locked files
 - results are noisy without a clear hypothesis
 
+## Known Research History
+
+**What worked:** `velocity_gain=2.0` with cross-product perpendicular lead. Improved evasive from 18.6m→13.95m.
+
+**v2 breakthrough:** Predictive lead (`lead_pos = relative_pos + 0.05 * relative_vel`) with blend-based aim broke the evasive ceiling. Quick score: 90.47→115.76 (+28%). Evasive: 13.95m→1.8m intercept. All 4 quick scenarios flythrough.
+
+**What failed (v2 ablations):**
+- Predictive lead at k=0.3: crashed, out-of-bounds
+- Predictive lead at k=0.1: crashed, out-of-bounds
+- Predictive lead at k=0.05 WITHOUT velocity_gain=2.0: marginal improvement (14m→still no flythrough)
+- Distance-adaptive k (inverted): evasive got worse (21.9m final distance)
+- Pure in-plane lateral correction without velocity term: out-of-bounds
+
+**Key insight:** The evasive target's motion is predictable (80% away + 30% lateral). The linear policy's cross-product term captures perpendicular motion but lacks predictive positioning. Adding a small (5%) predictive lead to the aim direction allows the pursuer to cut across the target's evasive path instead of chasing it. The blend factor prevents far-target overshoot while keeping full lead when close.
+
 ## Minimal Fresh-Context Prompt
 
 ```text
-Use autoresearch/HANDOFF.md. Improve viewport search and fly-through interception.
-Only edit autoresearch/editable/*.py. Run quick experiments, compare leaderboard,
-and keep only accepted changes that improve flythrough_success_rate without side-pass false success.
+Use autoresearch/HANDOFF.md. Evasive ceiling already broken by v2 (score=115.76).
+Current: velocity_gain=2.0 + predictive lead (k=0.05) + blend aim + cross-product.
+Quick: flythrough=1.0, mean_steps_to_intercept=44.8.
+Medium: flythrough=0.857, OOB=0.143 (far_hidden_search issue).
+Only edit autoresearch/editable/*.py. Run quick experiments, compare leaderboard.
+Consider tuning blend threshold or velocity_gain for far-target stability.
 ```

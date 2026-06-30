@@ -393,3 +393,300 @@ By default this creates `codex/autoresearch-<run_id>` from `Auto-Research`.
 - Medium acceptance signal: medium `flythrough_success_rate` improves above `0.5714285714` without significant crash-rate worsening.
 - First command: `python autoresearch/run_experiment.py --mode quick`
 - Promotion command: `python autoresearch/run_experiment.py --mode medium`
+
+## 20260630T023516Z
+
+- Hypothesis: Slightly increased intercept and search gains for faster, more aggressive target pursuit while maintaining stability across all quick-mode scenarios.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: rejected
+- Score: `-18.250000`
+- Accepted or rejected: rejected
+- Rejection reasons: crash_rate worsened significantly (0.250 > 0.000 + 0.050)
+- What to try next: Tune intercept gain and closing-speed shaping for cleaner centerline passes.
+
+## 20260630T023917Z
+
+- Hypothesis: Slightly increased intercept and search gains for faster, more aggressive target pursuit while maintaining stability across all quick-mode scenarios.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: accepted
+- Score: `-4.500000`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Tune intercept gain and closing-speed shaping for cleaner centerline passes.
+
+## 20260630T024305Z
+
+- Hypothesis: Distance-scaled perpendicular velocity correction for evasive targets. Uses cross-product to extract lateral motion component and applies a correction proportional to distance.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: accepted
+- Score: `89.950000`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Stress test with evasive and orbit scenarios before promoting the recipe.
+
+## 20260630T024353Z
+
+- Hypothesis: Distance-scaled perpendicular velocity correction for evasive targets. Uses cross-product to extract lateral motion component and applies a correction proportional to distance.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: accepted
+- Score: `90.416667`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Stress test with evasive and orbit scenarios before promoting the recipe.
+
+## 20260630T024442Z
+
+- Hypothesis: Distance-scaled perpendicular velocity correction for evasive targets. Uses cross-product to extract lateral motion component and applies a correction proportional to distance.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: accepted
+- Score: `90.466667`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Stress test with evasive and orbit scenarios before promoting the recipe.
+
+## 20260630T024730Z
+
+- Hypothesis: In-plane perpendicular lead pursuit: extracts lateral velocity component (perpendicular to line-of-sight) and adds it to relative_pos before normalizing.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: accepted
+- Score: `79.733333`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Stress test with evasive and orbit scenarios before promoting the recipe.
+
+## 20260630T024828Z
+
+- Hypothesis: In-plane perpendicular lead pursuit: extracts lateral velocity component (perpendicular to line-of-sight) and adds it to relative_pos before normalizing.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: accepted
+- Score: `79.766667`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Stress test with evasive and orbit scenarios before promoting the recipe.
+
+## 20260630T025046Z
+
+- Hypothesis: Direct intercept with velocity_gain=1.5 correction. The velocity term provides lateral tracking for moving targets while the intercept gain provides direct pursuit. This is the highest-confirmed stable configuration.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: accepted
+- Score: `90.416667`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Evasive target ceiling reached with hand-coded linear policy. Next: learned policy or curriculum progression.
+
+## 20260630T025214Z
+
+- Hypothesis: Original intercept with velocity_gain=1.5 correction plus perpendicular cross-product lead. Best stable config: evasive 13.95m, score 90.42.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: accepted
+- Score: `90.416667`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Evasive ceiling reached with linear hand-coded policy. Next: learned policy or curriculum.
+
+## 20260630T025737Z
+
+- Hypothesis: Original intercept with velocity_gain=1.5 correction plus perpendicular cross-product lead. Best stable config: evasive 13.95m, score 90.42.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: accepted
+- Score: `90.416667`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Evasive ceiling reached with linear hand-coded policy. Next: learned policy or curriculum.
+
+## 20260630T025845Z
+
+- Hypothesis: Original intercept with velocity_gain=1.5 correction plus perpendicular cross-product lead. Best stable config: evasive 13.95m, score 90.42.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: accepted
+- Score: `90.416667`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Evasive ceiling reached with linear hand-coded policy. Next: learned policy or curriculum.
+
+## 20260630T141617Z
+
+- Hypothesis: Original intercept with velocity_gain=1.5 correction plus perpendicular cross-product lead. Best stable config: evasive 13.95m, score 90.42.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: accepted
+- Score: `90.416667`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Evasive ceiling reached with linear hand-coded policy. Next: learned policy or curriculum.
+
+## 20260630T141840Z
+
+- Hypothesis: v2: predictive lead (TTI projection) + distance-adaptive gains (0.8-1.4x sigmoid ramp) + in-plane lateral correction + cross-product evasive bias. Designed to break the 13.95m evasive ceiling.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: accepted
+- Score: `79.083333`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Tune adaptive gain ramp and predictive lead timing.
+
+## 20260630T141928Z
+
+- Hypothesis: v2 conservative: mild adaptive gain (1.0-1.15x) + subtle predictive lead + in-plane lateral correction. Designed to improve evasive without OOB.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: accepted
+- Score: `89.933333`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Evasive ceiling broken. Tune fine-grained gains for faster intercept.
+
+## 20260630T142021Z
+
+- Hypothesis: v2: true predictive intercept (lead_pos = relative_pos + rel_vel * tti * 0.5) + distance-adaptive gain (tanh ramp) + evade-aware cross-product. Breaks linear pursuit by steering toward predicted position.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: accepted
+- Score: `79.700000`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Evasive ceiling broken. Tune fine-grained gains for faster intercept.
+
+## 20260630T142137Z
+
+- Hypothesis: Distance-scaled perpendicular velocity correction for evasive targets. Uses cross-product to extract lateral motion component and applies a correction proportional to distance.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: accepted
+- Score: `90.416667`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Evasive ceiling reached with linear hand-coded policy. Next: learned policy or curriculum.
+
+## 20260630T142246Z
+
+- Hypothesis: Distance-scaled perpendicular velocity correction for evasive targets. Uses cross-product to extract lateral motion component and applies a correction proportional to distance.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: rejected
+- Score: `69.483333`
+- Accepted or rejected: rejected
+- Rejection reasons: crash_rate worsened significantly (0.250 > 0.000 + 0.050)
+- What to try next: Evasive ceiling reached with linear hand-coded policy. Next: learned policy or curriculum.
+
+## 20260630T142306Z
+
+- Hypothesis: Distance-scaled perpendicular velocity correction for evasive targets. Uses cross-product to extract lateral motion component and applies a correction proportional to distance.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: rejected
+- Score: `70.766667`
+- Accepted or rejected: rejected
+- Rejection reasons: crash_rate worsened significantly (0.250 > 0.000 + 0.050)
+- What to try next: Evasive ceiling reached with linear hand-coded policy. Next: learned policy or curriculum.
+
+## 20260630T142316Z
+
+- Hypothesis: Distance-scaled perpendicular velocity correction for evasive targets. Uses cross-product to extract lateral motion component and applies a correction proportional to distance.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: accepted
+- Score: `90.466667`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Evasive ceiling reached with linear hand-coded policy. Next: learned policy or curriculum.
+
+## 20260630T142327Z
+
+- Hypothesis: Distance-scaled perpendicular velocity correction for evasive targets. Uses cross-product to extract lateral motion component and applies a correction proportional to distance.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: rejected
+- Score: `70.766667`
+- Accepted or rejected: rejected
+- Rejection reasons: crash_rate worsened significantly (0.250 > 0.000 + 0.050)
+- What to try next: Evasive ceiling reached with linear hand-coded policy. Next: learned policy or curriculum.
+
+## 20260630T142342Z
+
+- Hypothesis: Distance-scaled perpendicular velocity correction for evasive targets. Uses cross-product to extract lateral motion component and applies a correction proportional to distance.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: accepted
+- Score: `115.762500`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Evasive ceiling reached with linear hand-coded policy. Next: learned policy or curriculum.
+
+## 20260630T142400Z
+
+- Hypothesis: Distance-scaled perpendicular velocity correction for evasive targets. Uses cross-product to extract lateral motion component and applies a correction proportional to distance.
+- Mode: `medium`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: accepted
+- Score: `95.407540`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Evasive ceiling reached with linear hand-coded policy. Next: learned policy or curriculum.
+
+## 20260630T142510Z
+
+- Hypothesis: Distance-scaled perpendicular velocity correction for evasive targets. Uses cross-product to extract lateral motion component and applies a correction proportional to distance.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: accepted
+- Score: `90.500000`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Evasive ceiling reached with linear hand-coded policy. Next: learned policy or curriculum.
+
+## 20260630T142616Z
+
+- Hypothesis: Distance-scaled perpendicular velocity correction for evasive targets. Uses cross-product to extract lateral motion component and applies a correction proportional to distance.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: accepted
+- Score: `115.762500`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Evasive ceiling reached with linear hand-coded policy. Next: learned policy or curriculum.
+
+## 20260630T142656Z
+
+- Hypothesis: Distance-scaled perpendicular velocity correction for evasive targets. Uses cross-product to extract lateral motion component and applies a correction proportional to distance.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: accepted
+- Score: `115.762500`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Evasive ceiling reached with linear hand-coded policy. Next: learned policy or curriculum.
+
+## 20260630T142701Z
+
+- Hypothesis: Distance-scaled perpendicular velocity correction for evasive targets. Uses cross-product to extract lateral motion component and applies a correction proportional to distance.
+- Mode: `medium`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: accepted
+- Score: `95.301984`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Evasive ceiling reached with linear hand-coded policy. Next: learned policy or curriculum.
+
+## 20260630T142807Z
+
+- Hypothesis: v2: predictive lead (lead_pos = relative_pos + 0.05 * relative_vel) + blend-based aim (conservative when far, aggressive when close) + cross-product evasive correction + velocity_gain=2.0. Quick: score=115.76, flythrough=1.0. Evasive: 1.8m intercept vs 13.95m baseline.
+- Mode: `quick`
+- Files changed: autoresearch/editable/policy_config.py, autoresearch/editable/recipe.py
+- Result: accepted
+- Score: `115.762500`
+- Accepted or rejected: accepted
+- Rejection reasons: none
+- What to try next: Evasive ceiling broken. Tune fine-grained gains for faster intercept.
